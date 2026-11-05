@@ -78,14 +78,23 @@ async function updateTelemetry() {
             const card = document.querySelector(`[data-card="${index}"]`);
             if (!card) continue;
             const ageMs = reading.date_recorded ? Date.now() - new Date(reading.date_recorded + 'Z').getTime() : Infinity;
-            sensorStates[index] = ageMs <= 15000 ? 1 : 2;
-            powers[index] = Number(reading.power) || 0;
             const display = (value, digits, suffix, scale = 1) => Number.isFinite(Number(value)) && value !== null ? `${(Number(value) / scale).toFixed(digits)} ${suffix}` : `-- ${suffix}`;
-            card.querySelector('[data-field="voltage"]').textContent = display(reading.voltage, 1, 'V');
-            card.querySelector('[data-field="current"]').textContent = display(reading.current, 3, 'A');
-            card.querySelector('[data-field="energy"]').textContent = display(reading.energy, 3, 'kWh', 1000);
-            card.querySelector('[data-field="power"]').textContent = `${powers[index].toFixed(1)} W`;
-            card.querySelector('[data-field="timestamp"]').textContent = reading.date_recorded ? new Date(reading.date_recorded + 'Z').toLocaleTimeString() : 'Timestamp unavailable';
+            const isFresh = Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= 15000;
+            sensorStates[index] = isFresh ? 1 : 2;
+            if (isFresh) {
+                powers[index] = Number(reading.power) || 0;
+                card.querySelector('[data-field="voltage"]').textContent = display(reading.voltage, 1, 'V');
+                card.querySelector('[data-field="current"]').textContent = display(reading.current, 3, 'A');
+                card.querySelector('[data-field="energy"]').textContent = display(reading.energy, 3, 'kWh', 1000);
+                card.querySelector('[data-field="power"]').textContent = `${powers[index].toFixed(1)} W`;
+                card.querySelector('[data-field="timestamp"]').textContent = new Date(reading.date_recorded + 'Z').toLocaleTimeString();
+            } else {
+                card.querySelector('[data-field="voltage"]').textContent = '-- V';
+                card.querySelector('[data-field="current"]').textContent = '-- A';
+                card.querySelector('[data-field="energy"]').textContent = '-- kWh';
+                card.querySelector('[data-field="power"]').textContent = '-- W';
+                card.querySelector('[data-field="timestamp"]').textContent = reading.date_recorded ? `Last seen ${new Date(reading.date_recorded + 'Z').toLocaleTimeString()}` : 'No recent reading';
+            }
         }
         for (let slave = 1; slave <= 3; slave++) {
             const status = sensorStates[slave - 1] === 1 ? 'ONLINE' : sensorStates[slave - 1] === 2 ? 'STALE' : 'NO DATA';
