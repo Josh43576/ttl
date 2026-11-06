@@ -59,6 +59,7 @@ VOLTAGE_SCALE = float_setting("PZEM_VOLTAGE_SCALE", 10.0)
 CURRENT_SCALE = float_setting("PZEM_CURRENT_SCALE", 1000.0)
 ENERGY_SCALE = float_setting("PZEM_ENERGY_SCALE", 1.0)
 RFID_IDS = set(int_list(os.getenv("RFID_RESET_IDS", ""), ()))
+RFID_RST_GPIO = int(os.getenv("RFID_RST_GPIO", "25"))
 RFID_RESET_TIMEOUT_SECONDS = 5.0
 STALE_AFTER = max(5.0, POLL_INTERVAL * 3.0)
 
@@ -82,9 +83,21 @@ except ImportError:
     GPIO = None
 
 try:
-    from mfrc522 import SimpleMFRC522
+    from mfrc522 import MFRC522, SimpleMFRC522
 except ImportError:
+    MFRC522 = None
     SimpleMFRC522 = None
+
+
+def create_rfid_reader():
+    if MFRC522 is None or SimpleMFRC522 is None:
+        raise RuntimeError("mfrc522 library is not installed")
+
+    class ConfiguredSimpleMFRC522(SimpleMFRC522):
+        def __init__(self):
+            self.READER = MFRC522(pin_rst=RFID_RST_GPIO)
+
+    return ConfiguredSimpleMFRC522()
 
 lock = threading.RLock()
 state = {
@@ -236,7 +249,7 @@ def rfid_loop() -> None:
             state["rfid_status"] = "RFID library unavailable; reset disabled"
         return
     try:
-        reader = SimpleMFRC522()
+        reader = create_rfid_reader()
     except Exception as exc:
         with lock:
             state["rfid_status"] = f"RFID initialization failed: {exc}"

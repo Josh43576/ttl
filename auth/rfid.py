@@ -6,10 +6,25 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+RFID_RST_GPIO = int(os.environ.get("RFID_RST_GPIO", "25"))
+
 try:
-    from mfrc522 import SimpleMFRC522
+    from mfrc522 import MFRC522, SimpleMFRC522
 except ModuleNotFoundError:
+    MFRC522 = None
     SimpleMFRC522 = None
+
+
+def _new_reader():
+    """Build the standard reader with RST on a GPIO not used by the relays."""
+    if MFRC522 is None or SimpleMFRC522 is None:
+        raise RuntimeError("mfrc522 library is not installed")
+
+    class ConfiguredSimpleMFRC522(SimpleMFRC522):
+        def __init__(self):
+            self.READER = MFRC522(pin_rst=RFID_RST_GPIO)
+
+    return ConfiguredSimpleMFRC522()
 
 
 class _SimulatedRFIDReader:
@@ -77,7 +92,7 @@ def init_reader():
         print("RFID library unavailable; RFID reset is disabled.")
         return False
     try:
-        reader = SimpleMFRC522()
+        reader = _new_reader()
         return True
     except Exception as exc:
         print(f"RFID initialization failed; RFID reset is disabled: {exc}")
