@@ -44,7 +44,11 @@ if len(GPIO_PINS) != 3 or len(set(GPIO_PINS)) != 3:
 if len(SLAVE_IDS) != 3 or len(set(SLAVE_IDS)) != 3 or any(not 1 <= value <= 247 for value in SLAVE_IDS):
     SLAVE_IDS = [1, 2, 3]
 
-PORT = os.getenv("PZEM_PORT", "/dev/ttyUSB0")
+PORT_BY_SLAVE_ID = {
+    1: os.getenv("PZEM_PORT_SLAVE_1", "/dev/ttyUSB1"),
+    2: os.getenv("PZEM_PORT_SLAVE_2", "/dev/ttyUSB0"),
+    3: os.getenv("PZEM_PORT_SLAVE_3", "/dev/ttyUSB2"),
+}
 BAUDRATE = int_list(os.getenv("PZEM_BAUDRATE", "9600"), (9600,))[0]
 SERIAL_TIMEOUT = float_setting("PZEM_TIMEOUT_SECONDS", 0.5)
 POLL_INTERVAL = float_setting("POLL_INTERVAL_SECONDS", 2.0)
@@ -130,31 +134,39 @@ def read_registers(port, slave_id: int, address: int, quantity: int) -> bytes:
 
 
 def read_pzem_bus() -> list[dict]:
-    """Poll all configured slaves sequentially on the single daisy-chain bus."""
+    """Poll each configured slave through its dedicated USB-to-TTL adapter."""
     if serial is None:
         raise RuntimeError("Install pyserial to enable PZEM readings")
     results = []
-    with serial.Serial(PORT, baudrate=BAUDRATE, bytesize=8, parity="N", stopbits=1,
-                       timeout=SERIAL_TIMEOUT, write_timeout=SERIAL_TIMEOUT) as bus:
-        for slave_id in SLAVE_IDS:
-            row = {"slave_id": slave_id, "voltage": None, "current": None,
-                   "power": None, "energy": None, "error": None}
-            errors = []
-            registers = (("voltage", 0x0000, 1, VOLTAGE_SCALE),
-                         ("current", 0x0001, 2, CURRENT_SCALE),
-                         ("power", 0x0003, 2, POWER_SCALE),
-                         ("energy", 0x0005, 2, ENERGY_SCALE))
-            for name, address, quantity, scale in registers:
-                try:
-                    raw = read_registers(bus, slave_id, address, quantity)
-                    value = int.from_bytes(raw, "big") / scale
-                    if not math.isfinite(value) or value < 0:
-                        raise ValueError("invalid numeric measurement")
-                    row[name] = value
-                except Exception as exc:
-                    errors.append(f"{name}: {exc}")
-            row["error"] = "; ".join(errors) or None
+    for slave_id in SLAVE_IDS:
+        row = {"slave_id": slave_id, "voltage": None, "current": None,
+               "power": None, "energy": None, "error": None}
+        errors = []
+        port_name = PORT_BY_SLAVE_ID.get(slave_id)
+        if not port_name:
+            row["error"] = f"No serial port configured for slave {slave_id}"
             results.append(row)
+            continue
+        registers = (("voltage", 0x0000, 1, VOLTAGE_SCALE),
+                     ("current", 0x0001, 2, CURRENT_SCALE),
+                     ("power", 0x0003, 2, POWER_SCALE),
+                     ("energy", 0x0005, 2, ENERGY_SCALE))
+        try:
+            with serial.Serial(port_name, baudrate=BAUDRATE, bytesize=8, parity="N", stopbits=1,
+                               timeout=SERIAL_TIMEOUT, write_timeout=SERIAL_TIMEOUT) as bus:
+                for name, address, quantity, scale in registers:
+                    try:
+                        raw = read_registers(bus, slave_id, address, quantity)
+                        value = int.from_bytes(raw, "big") / scale
+                        if not math.isfinite(value) or value < 0:
+                            raise ValueError("invalid numeric measurement")
+                        row[name] = value
+                    except Exception as exc:
+                        errors.append(f"{name}: {exc}")
+        except Exception as exc:
+            errors.append(f"serial port {port_name}: {exc}")
+        row["error"] = "; ".join(errors) or None
+        results.append(row)
     return results
 
 

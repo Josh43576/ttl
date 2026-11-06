@@ -1,33 +1,38 @@
 # PZEM-004T V4 setup for the Raspberry Pi reader
 
-## Confirmed project settings
+## USB-to-TTL port and meter mapping
 
-- The reader uses `/dev/ttyUSB0`, 9600 baud, 8 data bits, no parity, and 1 stop bit.
-- `sensors/pzem.py` polls Modbus IDs 1, 2, and 3 sequentially.
-- The Pi sees the USB serial adapter at `/dev/ttyUSB0`; this confirms Linux detects a serial device, not that the meters answer.
-- Peacefair identifies PZEM-004T V4 as a TTL UART model. `TTL485-V2.0` is a TTL-to-RS485 converter, not the meter or its Modbus address.
-- A V4-targeted implementation uses function 0x04 and the same measurement register addresses as this reader. Do not change the reader to the conflicting register table from non-vendor pages without confirming against the exact meter documentation.
+This installation uses a separate USB-to-TTL adapter for each PZEM. The reader is configured as follows:
 
-## Communication topology
+| PZEM slave ID | Raspberry Pi serial port |
+| ---: | --- |
+| 1 | `/dev/ttyUSB1` |
+| 2 | `/dev/ttyUSB0` |
+| 3 | `/dev/ttyUSB2` |
 
-Each meter's TTL interface must go to its own TTL485 converter. Join the converters' RS485 A/B sides to the RS485 bus, and connect that bus to a USB-to-RS485 adapter at the Pi. Confirm the terminal labels and orientation from the exact converter documentation. Stop `main.py` before communication wiring checks; have a qualified electrician handle work near the AC side. Never change wiring while energized.
+The Pi polls each meter through its assigned port. Linux may assign different `ttyUSB` numbers after adapters are unplugged or reconnected; check `ls -l /dev/ttyUSB*` and update the mapping in `sensors/pzem.py` and `simple_rpi3_hub/hub.py` if the assignment changes. The serial settings are 9600 baud, 8 data bits, no parity, and 1 stop bit.
 
-## Assign unique addresses
+## Test the meters
 
-The V4 default address is 1. Program one meter at a time; all three must not be connected to the communication bus during an address change. The address utility uses Modbus function `0x06` (Write Single Register) to set register `0x0002` to the new ID. The meter manual reserves command `0x41` for calibration; do not use it for address changes.
-
-On the Pi, stop `main.py`, then from `~/last` run one command per meter. Keep only the target meter connected to the RS485 communication bus during each operation:
+Stop `main.py` before opening the serial adapters with the test tool. From the project directory, run:
 
 ```bash
-python3 configure_pzem_address.py --port /dev/ttyUSB0 --current-id 1 --new-id 2
-python3 configure_pzem_address.py --port /dev/ttyUSB0 --current-id 1 --new-id 3
+python3 pzem_multi_reader.py
 ```
 
-The first meter remains at ID 1 and needs no address change. The script requires typing `ONE PZEM ONLY`, sends the V4 address command, then verifies a voltage-register response at the new ID. If verification fails, stop and inspect the adapter, address, and bus; do not keep sending write commands.
+Choose a slave ID to test its configured port, or choose `A` to test all three. The tool should report the mapping before polling. A missing `/dev/ttyUSBx` error means the adapter is not currently detected at that path; a Modbus timeout means no valid reply came from that address on the selected adapter.
 
-After programming, reconnect the three-meter bus and confirm IDs 1, 2, and 3 are unique. Start `main.py` with `BASELINE_MODE=1` and confirm clean readings for every ID before enabling any relay control.
+## Change an address only when needed
 
-References:
+Address changes are not required when a meter already responds at its intended ID. If changing one, stop `main.py`, ensure the selected adapter's data lines connect to only the target meter, and supply the meter's known current ID and desired new ID. For example, change the meter on `/dev/ttyUSB1` from ID 3 to ID 1 with:
 
-- [Peacefair PZEM-004T V4 product page](https://en.peacefair.cn/product/772.html)
-- [PZEM-004T register and address-setting manual](https://eleceasy.com/uploads/short-url/8VLmeLXH3Apgu5QvI9emrjlBmuV.pdf)
+```bash
+python3 configure_pzem_address.py --port /dev/ttyUSB1 --current-id 3 --new-id 1
+```
+
+Confirm the prompt only when that adapter is connected to the intended single meter. The script verifies the new address after writing it. Do not use the same value for `--current-id` and `--new-id`.
+
+## Safety
+
+PZEM modules may be connected to mains voltage. De-energize the equipment before changing wiring, follow the exact meter and adapter manuals, and have a qualified person handle mains-side work. Do not assume multiple TTL TX lines can share one connection.
+

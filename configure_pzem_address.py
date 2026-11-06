@@ -7,15 +7,15 @@ from sensors.pzem import PZEM_PORTS, set_pzem_address
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", default=PZEM_PORTS[0], help="USB-RS485 serial port (default: /dev/ttyUSB0)")
+    parser.add_argument("--port", default=PZEM_PORTS[0], help="USB serial port for the isolated target meter (default: /dev/ttyUSB0)")
     parser.add_argument("--current-id", type=int, required=True, help="meter's current Modbus ID")
     parser.add_argument("--new-id", type=int, required=True, help="new Modbus ID (1..247)")
     args = parser.parse_args()
 
     print("PZEM-004T V4 address configuration")
     print(f"Port: {args.port}; requested address change: {args.current_id} -> {args.new_id}")
-    print("Stop main.py and disconnect every other meter from the RS485 communication bus.")
-    print("Only the target meter may be connected when changing its address.")
+    print("Stop main.py before changing an address.")
+    print("Only the target meter may be connected to this adapter's serial lines.")
     confirmation = input('Type "ONE PZEM ONLY" to continue: ').strip()
     if confirmation != "ONE PZEM ONLY":
         print("Cancelled; no address command was sent.")

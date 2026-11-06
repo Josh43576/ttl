@@ -12,15 +12,15 @@ RFID reader ─ SPI ────────────────────
 Relay inputs ◀ GPIO ───────────────────────────────────────────┘
 ```
 
-The Pi polls each Modbus slave in turn. PZEM meters are Modbus slaves; they do not initiate/push readings. The hub collects the readings and displays them in the browser. Web relay requests are handled on the Pi and sent to GPIO locally.
+The Pi polls each Modbus slave through its own USB-to-TTL adapter. The configured mapping is slave 1 → `/dev/ttyUSB1`, slave 2 → `/dev/ttyUSB0`, and slave 3 → `/dev/ttyUSB2`. PZEM meters are Modbus slaves; they do not initiate/push readings. The hub collects the readings and displays them in the browser. Web relay requests are handled on the Pi and sent to GPIO locally.
 
-**Check the adapter's electrical interface:** RS-485 PZEM modules need a USB-to-RS-485 adapter for a multidrop daisy chain. A USB-to-TTL UART is not an RS-485 transceiver. Use TTL only if the exact PZEM model exposes a compatible TTL Modbus interface and supports the intended bus topology.
+Confirm that the exact PZEM model exposes a compatible TTL Modbus interface. Use one adapter per meter as configured; do not join multiple TTL TX lines together unless the meter documentation explicitly supports that topology. Linux may renumber USB adapters after reconnecting them, so confirm the mapping with `ls -l /dev/ttyUSB*` and update `.env` if needed.
 
 ## Install and run
 
-1. Copy `.env.example` to `.env` in this folder. Set a long random `FLASK_SECRET_KEY`, web username/password, serial port, relay pin assignments, and authorized RFID IDs. Do not commit `.env`.
+1. Copy `.env.example` to `.env` in this folder. Set a long random `FLASK_SECRET_KEY`, web username/password, the three PZEM port paths, relay pin assignments, and authorized RFID IDs. Do not commit `.env`.
 2. On Raspberry Pi OS, create a virtual environment and install `requirements.txt`. The GPIO and RFID packages require the Pi and their hardware libraries.
-3. Confirm the PZEM slave IDs and serial settings match the bus. Default IDs are 1, 2, and 3 at 9600 baud, 8N1.
+3. Confirm the PZEM slave IDs and their port mapping match the installation. Defaults are ID 1 on `/dev/ttyUSB1`, ID 2 on `/dev/ttyUSB0`, and ID 3 on `/dev/ttyUSB2`, at 9600 baud, 8N1.
 4. Start with outputs disconnected from loads. Run `python hub.py` and open `http://<pi-address>:5000` from a browser on the trusted LAN.
 5. Check that measurements match the meters, then check relay polarity with a disconnected test load. The code assumes GPIO HIGH = relay ON and LOW = relay OFF.
 

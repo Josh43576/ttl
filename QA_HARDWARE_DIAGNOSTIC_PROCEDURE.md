@@ -21,7 +21,7 @@ The hardware QA gates below follow that order. The thesis identifies a Raspberry
 
 ### Known implementation/document mismatches to resolve before energizing
 
-- The installed meters are reported as PZEM-004T V4, which Peacefair identifies as **TTL UART**. The project communicates over a shared RS-485 bus, so each meter needs its own TTL-to-RS485 transceiver and the Pi needs a USB-to-RS485 host adapter. The software sends Modbus RTU requests at `/dev/ttyUSB0`, 9600 baud, 8 data bits, no parity, 1 stop bit, IDs 1, 2, and 3, function code 0x04. Confirm the exact converter terminal wiring, host adapter type, and each meter's unique address before testing.
+- The installed meters are reported as PZEM-004T V4 TTL UART models. This installation uses one USB-to-TTL adapter per meter. The configured mapping is slave 1 → `/dev/ttyUSB1`, slave 2 → `/dev/ttyUSB0`, and slave 3 → `/dev/ttyUSB2`; requests use 9600 baud, 8 data bits, no parity, 1 stop bit, and function code 0x04. Confirm the current Linux port assignment with `ls -l /dev/ttyUSB*` because numbering can change after reconnecting adapters.
 - The thesis names SSR-40DA in its materials list but SSR-25DA in its essential-parts table. Record the actual installed model and use that exact manufacturer's datasheet for input voltage/current, output rating, heat sinking, and protection requirements.
 - The thesis describes lighting, convenience outlet, and special-purpose/ACU categories. Current software maps channel indices to `acu`, `outlet`, `lighting` in that order, and reads sensor IDs 1, 2, 3 by index. Verify and document one authoritative sensor-to-SSR-to-load mapping before testing; do not assume labels imply the wiring order.
 - `main.py` reads sensors and controls the SSRs, but it does not use RFID. RFID behavior appears in `manual_interface.py`, which is read-only and accesses the same serial sensor bus. Do not run it at the same time as `main.py`.
@@ -96,7 +96,7 @@ With the system isolated and verified de-energized, the electrician checks the a
 ## 6. Gate C — Pi, power, and software startup (no connected load)
 
 1. Confirm stable Pi supply, storage, and boot. Confirm low-voltage power supply output against its label/specification using an appropriate meter.
-2. Check the Pi sees the expected serial adapter. On Linux, inspect `/dev/serial/by-id/` if present and confirm the configured path. The current reader defaults to `/dev/ttyUSB0`; do not assume that path belongs to the PZEM adapter if multiple serial devices are attached.
+2. Check the Pi sees all expected serial adapters. On Linux, run `ls -l /dev/ttyUSB* /dev/serial/by-id/` and confirm the configured paths: slave 1 on `/dev/ttyUSB1`, slave 2 on `/dev/ttyUSB0`, and slave 3 on `/dev/ttyUSB2`. Linux may renumber adapters after reconnecting them.
 3. Confirm only one program owns the PZEM serial device. `main.py`, `manual_interface.py`, and `pzem_multi_reader.py` must not poll it concurrently.
 4. Check `.env` on the Pi without sharing its contents. Confirm `SIMULATE_HARDWARE=0`, `BASELINE_MODE=1`, correct `API_BASE_URL`, and a non-placeholder `DEVICE_API_TOKEN` matching Flask. Never put the token in the test record or screenshots.
 5. Start Flask and confirm the dashboard opens from the authorized test device. Start the sensor-reader diagnostic only when the main monitor is stopped.

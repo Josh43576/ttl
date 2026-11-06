@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from sensors.pzem import (
     PZEM_PORTS,
+    PZEM_PORT_BY_SLAVE_ID,
     PZEM_SLAVE_IDS,
     build_modbus_request,
     calculate_crc,
@@ -16,8 +17,13 @@ class TestPzemModbus(unittest.TestCase):
     def test_slave_ids_are_present(self):
         self.assertEqual(PZEM_SLAVE_IDS, [1, 2, 3])
 
-    def test_single_serial_port_bus_is_used(self):
-        self.assertEqual(PZEM_PORTS, ["/dev/ttyUSB0"])
+    def test_dedicated_usb_ttl_port_mapping_is_configured(self):
+        self.assertEqual(PZEM_PORTS, ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2"])
+        self.assertEqual(PZEM_PORT_BY_SLAVE_ID, {
+            1: "/dev/ttyUSB1",
+            2: "/dev/ttyUSB0",
+            3: "/dev/ttyUSB2",
+        })
 
     def test_build_modbus_request_uses_slave_id(self):
         frame = build_modbus_request(2, 0x04, 0x0003, 2)

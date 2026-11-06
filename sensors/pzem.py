@@ -10,6 +10,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised via import-time depe
 
 __all__ = [
     "PZEM_PORTS",
+    "PZEM_PORT_BY_SLAVE_ID",
     "PZEM_SLAVE_IDS",
     "BAUDRATE",
     "get_available_ports",
@@ -23,14 +24,21 @@ __all__ = [
     "read_all_pzem",
 ]
 
-# PZEM-004T V4 modules use TTL UART. Use one TTL-to-RS485 transceiver per meter
-# for a shared RS485 bus, plus a USB-to-RS485 adapter at the Pi. Poll distinct
-# Modbus slave IDs sequentially over the single bus.
+# This installation uses one USB-to-TTL adapter per PZEM. Keep the physical
+# USB port to meter mapping explicit; the same Modbus ID can be used on
+# separate point-to-point adapters, but this installation assigns IDs 1..3.
 PZEM_PORTS = [
     "/dev/ttyUSB0",
+    "/dev/ttyUSB1",
+    "/dev/ttyUSB2",
 ]
 UART_PORTS = ["/dev/serial0", "/dev/ttyAMA0", "/dev/ttyS0"]
 PZEM_SLAVE_IDS = [1, 2, 3]
+PZEM_PORT_BY_SLAVE_ID = {
+    1: "/dev/ttyUSB1",
+    2: "/dev/ttyUSB0",
+    3: "/dev/ttyUSB2",
+}
 BAUDRATE = 9600
 SERIAL_TIMEOUT = 1.0
 
@@ -59,19 +67,9 @@ def set_rs485_direction(transmit: bool):
 
 
 def get_available_ports():
-    """Return the serial ports available for the 3 PZEM sensors."""
-    available = [port for port in PZEM_PORTS + UART_PORTS if os.path.exists(port)]
-
-    if not available:
-        return list(PZEM_PORTS)
-
-    ports = []
-    for port in available:
-        if port not in ports:
-            ports.append(port)
-        if len(ports) >= 3:
-            break
-    return ports
+    """Return configured USB-TTL ports that currently exist on the Pi."""
+    available = [port for port in PZEM_PORTS if os.path.exists(port)]
+    return available if available else list(PZEM_PORTS)
 
 
 def prompt_for_slave_id(slave_ids=None, input_func=input):
@@ -234,7 +232,7 @@ def set_pzem_address(port, current_id: int, new_id: int):
     """Change one PZEM-004T V4 address and verify it responds at the new ID.
 
     Uses Modbus function 0x06 to write the new ID to holding register 0x0002.
-    The caller must isolate exactly one meter on the RS485 bus before calling.
+    The caller must isolate exactly one meter on the selected serial connection before calling.
     """
     if serial is None:
         raise RuntimeError("pyserial is not installed; install the project dependencies.")
@@ -322,7 +320,7 @@ def read_pzem(port, slave_id: int = 1):
 
 
 def read_all_pzem():
-    """Read all PZEM sensors on one Modbus-RTU bus by polling slave IDs 1..3 sequentially."""
+    """Read each PZEM through its dedicated USB-TTL port and configured slave ID."""
     if os.environ.get("SIMULATE_HARDWARE") == "1":
         return [
             {"slave_id": slave_id, "voltage": 230.0, "current": 0.5 * slave_id,
@@ -330,20 +328,7 @@ def read_all_pzem():
             for slave_id in PZEM_SLAVE_IDS
         ]
     readings = []
-    available_ports = get_available_ports()
-    port = available_ports[0] if available_ports else PZEM_PORTS[0]
-
     for slave_id in PZEM_SLAVE_IDS:
+        port = PZEM_PORT_BY_SLAVE_ID[slave_id]
         readings.append(read_pzem(port, slave_id=slave_id))
-
-    while len(readings) < 3:
-        readings.append({
-            "slave_id": len(readings) + 1,
-            "voltage": None,
-            "current": None,
-            "power": None,
-            "energy": None,
-            "error": "No PZEM sensor detected on this channel",
-        })
-
-    return readings[:3]
+    return readings
