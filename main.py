@@ -4,14 +4,22 @@ import math
 import os
 import signal
 import tempfile
+import threading
 import time
 from datetime import date, datetime, timezone
 
 from sensors import read_all_pzem
 from controls.relay import control_appliance, cleanup as cleanup_relay, init as init_relays
+from auth.rfid import (
+    AUTHORIZED_IDS,
+    RFID_RESET_TIMEOUT_SECONDS,
+    init_reader as init_rfid_reader,
+    is_authorized,
+    read_rfid_id_no_block,
+)
 from utils.server import (
     get_appliance_configs, get_control_commands, report_trip,
-    send_to_server, set_appliance_names,
+    reset_tripped_appliances, send_to_server, set_appliance_names,
 )
 
 shutdown_requested = False
@@ -146,6 +154,59 @@ def signal_handler(_sig, _frame):
     shutdown_requested = True
 
 
+def rfid_reset_loop():
+    """Require two scans of an authorized card to clear trips, keeping outputs OFF."""
+    if not AUTHORIZED_IDS:
+        print("RFID reset disabled: add authorized card IDs to RFID_RESET_IDS in .env.")
+        return
+    if not init_rfid_reader():
+        print("RFID reset disabled: reader could not be initialized.")
+        return
+
+    print("RFID trip reset ready; scan an authorized card twice within 5 seconds.")
+    last_card = None
+    last_seen = 0.0
+    pending_card = None
+    pending_at = 0.0
+
+    while not shutdown_requested:
+        card_id = read_rfid_id_no_block()
+        now = time.monotonic()
+        if card_id is None:
+            if now - last_seen >= 0.5:
+                last_card = None
+            if pending_card is not None and now - pending_at > RFID_RESET_TIMEOUT_SECONDS:
+                pending_card = None
+                print("RFID reset confirmation expired.")
+            time.sleep(0.15)
+            continue
+
+        last_seen = now
+        if card_id == last_card:
+            time.sleep(0.15)
+            continue
+        last_card = card_id
+
+        if not is_authorized(card_id):
+            pending_card = None
+            print("RFID reset denied: card is not authorized.")
+            time.sleep(0.15)
+            continue
+
+        if pending_card == card_id and now - pending_at <= RFID_RESET_TIMEOUT_SECONDS:
+            try:
+                result = reset_tripped_appliances()
+                print(f"RFID reset accepted; all appliance requests remain OFF: {result}")
+            except Exception as exc:
+                print(f"RFID reset upload failed; trips remain latched: {exc}")
+            pending_card = None
+        else:
+            pending_card = card_id
+            pending_at = now
+            print(f"Authorized card scanned. Scan the same card again within {RFID_RESET_TIMEOUT_SECONDS:g}s to confirm reset.")
+        time.sleep(0.15)
+
+
 def valid_power(reading):
     if not isinstance(reading, dict) or reading.get("error"):
         return None
@@ -181,6 +242,7 @@ def apply_commands(readings, commands, limits):
     if not isinstance(commands, dict):
         commands = {}
     requested_states = commands.get("appliances")
+    tripped_states = commands.get("tripped")
     if (
         not commands.get("connected")
         or limits is None
@@ -188,6 +250,9 @@ def apply_commands(readings, commands, limits):
         or not isinstance(requested_states, list)
         or len(requested_states) != len(DEVICE_KEYS)
         or any(state not in ("ON", "OFF") for state in requested_states)
+        or not isinstance(tripped_states, list)
+        or len(tripped_states) != len(DEVICE_KEYS)
+        or any(type(state) is not bool for state in tripped_states)
     ):
         for index in range(3):
             control_appliance(index, False)
@@ -218,6 +283,9 @@ def apply_commands(readings, commands, limits):
                     reported_cutoffs.add(index)
             return
     for index, key in enumerate(DEVICE_KEYS):
+        if tripped_states[index]:
+            control_appliance(index, False)
+            continue
         power = measured[index]
         requested = requested_states[index] == "ON"
         if not requested:
@@ -257,6 +325,8 @@ def main():
     if not init_relays():
         cleanup_relay()
         raise RuntimeError("Relay initialization failed; refusing to run control loop")
+
+    threading.Thread(target=rfid_reset_loop, name="rfid-reset", daemon=True).start()
 
     state = load_daily_state()
     try:

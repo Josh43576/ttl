@@ -16,6 +16,7 @@ from controls.relay import (  # noqa: E402
     GPIO_RELAY_PINS,
     HARDWARE_AVAILABLE,
     PHYSICAL_RELAY_PINS,
+    relay_output_level,
 )
 
 
@@ -47,19 +48,18 @@ def run_ssr_test(pin=None, pulse_seconds=2):
     try:
         # Begin with every relay output commanded OFF.
         for relay_pin in GPIO_RELAY_PINS:
-            GPIO.setup(relay_pin, GPIO.OUT)
-            GPIO.output(relay_pin, GPIO.LOW)
+            GPIO.setup(relay_pin, GPIO.OUT, initial=relay_output_level(False))
+            GPIO.output(relay_pin, relay_output_level(False))
 
         for relay_pin in pins_to_test:
             physical_pin = physical_by_bcm[relay_pin]
-            print(
-                f"BCM GPIO {relay_pin} (physical pin {physical_pin}): "
-                f"HIGH for {pulse_seconds:g} seconds, then LOW."
-            )
+            on_level = "HIGH" if relay_output_level(True) == GPIO.HIGH else "LOW"
+            off_level = "HIGH" if relay_output_level(False) == GPIO.HIGH else "LOW"
+            print(f"BCM GPIO {relay_pin} (physical pin {physical_pin}): {on_level} for {pulse_seconds:g} seconds, then {off_level}.")
             print("Observe the SSR input indicator, if present; the Pi cannot read it back.")
-            GPIO.output(relay_pin, GPIO.HIGH)
+            GPIO.output(relay_pin, relay_output_level(True))
             time.sleep(pulse_seconds)
-            GPIO.output(relay_pin, GPIO.LOW)
+            GPIO.output(relay_pin, relay_output_level(False))
             time.sleep(1)
 
         print("GPIO pulse test complete; all relay outputs are LOW.")
@@ -67,7 +67,7 @@ def run_ssr_test(pin=None, pulse_seconds=2):
     finally:
         for relay_pin in GPIO_RELAY_PINS:
             try:
-                GPIO.output(relay_pin, GPIO.LOW)
+                GPIO.output(relay_pin, relay_output_level(False))
             except Exception:
                 pass
         GPIO.cleanup(GPIO_RELAY_PINS)

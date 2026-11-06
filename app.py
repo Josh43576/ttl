@@ -276,7 +276,7 @@ def inject_csrf_token():
 def protect_browser_posts():
     if request.method != 'POST':
         return None
-    device_write_paths = {'/api/data', '/api/device-trip', '/api/power-events', '/api/config'}
+    device_write_paths = {'/api/data', '/api/device-trip', '/api/power-events', '/api/config', '/api/rfid-reset'}
     if request.path in device_write_paths:
         return None  # These routes validate the Pi bearer token themselves.
     if not csrf_valid():
@@ -600,10 +600,18 @@ def api_control():
             return jsonify({"error": "appliances must be a list of ON/OFF values"}), 400
 
         entries = ordered_appliance_configs()
+        blocked = [
+            entry.display_name
+            for entry, state in zip(entries, normalized)
+            if state == 'ON' and entry.is_tripped
+        ]
+        if blocked:
+            return jsonify({
+                "error": "Trip latch must be cleared with an authorized RFID reset before turning on: "
+                         + ", ".join(blocked)
+            }), 409
         for entry, state in zip(entries, normalized):
             entry.requested_state = state
-            if state == 'ON':
-                entry.is_tripped = False
             entry.updated_at = utcnow_naive()
         db.session.commit()
         names = [entry.display_name for entry in entries]
@@ -627,6 +635,33 @@ def api_control():
         "preset_limit": get_preset_limit(),
         "appliance_names": [entry.display_name for entry in entries]
     })
+
+
+@app.route('/api/rfid-reset', methods=['POST'])
+def api_rfid_reset():
+    """Clear trip latches after the Pi validates a confirmed RFID scan; keep outputs OFF."""
+    denied = require_device_token()
+    if denied:
+        return denied
+    entries = ordered_appliance_configs()
+    changed = any(entry.is_tripped or entry.requested_state == 'ON' for entry in entries)
+    now = utcnow_naive()
+    for entry in entries:
+        entry.requested_state = 'OFF'
+        entry.is_tripped = False
+        entry.updated_at = now
+    if changed:
+        db.session.add(PowerEvent(
+            event_type='rfid_reset',
+            message='Authorized RFID reset cleared trip latches; all appliance requests remain OFF.',
+        ))
+    db.session.commit()
+    return jsonify({
+        'status': 'reset',
+        'changed': changed,
+        'appliances': ['OFF'] * len(entries),
+        'tripped': [False] * len(entries),
+    }), 200
 
 
 @app.route('/api/device-trip', methods=['POST'])

@@ -31,6 +31,15 @@ def send_to_server(data):
     return response.json()
 
 
+def reset_tripped_appliances():
+    """Clear server-side trip latches using a locally authorized RFID scan."""
+    response = requests.post(
+        f"{API_BASE_URL}/api/rfid-reset", json={}, headers=_headers(), timeout=REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def get_control_commands():
     """Read persisted relay requests. Return connected=False on any API failure."""
     try:
@@ -40,7 +49,13 @@ def get_control_commands():
         response.raise_for_status()
         payload = response.json()
         states = payload.get("appliances") if isinstance(payload, dict) else None
-        if not isinstance(states, list) or len(states) != 3 or any(s not in ("ON", "OFF") for s in states):
+        tripped = payload.get("tripped") if isinstance(payload, dict) else None
+        if (
+            not isinstance(states, list) or len(states) != 3
+            or any(s not in ("ON", "OFF") for s in states)
+            or not isinstance(tripped, list) or len(tripped) != 3
+            or any(type(value) is not bool for value in tripped)
+        ):
             raise ValueError("invalid control response")
         payload["connected"] = True
         payload.setdefault("preset_limit", DEFAULT_PRESET_LIMIT)
@@ -49,6 +64,7 @@ def get_control_commands():
     except (requests.RequestException, ValueError, RuntimeError) as exc:
         print(f"Control API unavailable: {exc}")
         return {"appliances": ["OFF"] * 3, "connected": False,
+                "tripped": [True] * 3,
                 "preset_limit": DEFAULT_PRESET_LIMIT,
                 "appliance_names": DEFAULT_APPLIANCE_NAMES}
 

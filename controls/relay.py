@@ -1,4 +1,9 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 try:
     import RPi.GPIO as GPIO
@@ -23,8 +28,9 @@ class _GPIO:
         pass
 
     @staticmethod
-    def setup(pin, mode):
-        pass
+    def setup(pin, mode, initial=None):
+        if initial is not None:
+            _GPIO.states[pin] = initial
 
     @staticmethod
     def output(pin, value):
@@ -47,6 +53,14 @@ if os.environ.get("SIMULATE_HARDWARE") == "1":
 GPIO_RELAY_PINS = [17, 27, 22]
 PHYSICAL_RELAY_PINS = [11, 13, 15]
 relay_pins = GPIO_RELAY_PINS.copy()
+SSR_ACTIVE_HIGH = os.environ.get("SSR_ACTIVE_HIGH", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def relay_output_level(is_on):
+    """Map logical ON/OFF to the configured electrical level at the SSR input."""
+    active_level = GPIO.HIGH if SSR_ACTIVE_HIGH else GPIO.LOW
+    inactive_level = GPIO.LOW if SSR_ACTIVE_HIGH else GPIO.HIGH
+    return active_level if is_on else inactive_level
 
 # Runtime initialization flag
 _relays_initialized = False
@@ -68,22 +82,25 @@ def init(pins=None):
             setwarnings(False)
         GPIO.setmode(GPIO.BCM)
         for pin in relay_pins:
-            GPIO.setup(pin, GPIO.OUT)
-            GPIO.output(pin, GPIO.LOW)
+            GPIO.setup(pin, GPIO.OUT, initial=relay_output_level(False))
+            GPIO.output(pin, relay_output_level(False))
         _relays_initialized = True
         return True
     except Exception as e:
         print(f"Relay init failed: {e}")
         for pin in relay_pins:
             try:
-                GPIO.output(pin, GPIO.LOW)
+                GPIO.output(pin, relay_output_level(False))
             except Exception:
                 pass
         _relays_initialized = False
         return False
 
 
-__all__ = ["GPIO_RELAY_PINS", "PHYSICAL_RELAY_PINS", "relay_pins", "control_appliance", "cleanup", "init"]
+__all__ = [
+    "GPIO_RELAY_PINS", "PHYSICAL_RELAY_PINS", "SSR_ACTIVE_HIGH", "relay_pins",
+    "relay_output_level", "control_appliance", "cleanup", "init",
+]
 
 
 def control_appliance(index, state: bool):
@@ -97,10 +114,10 @@ def control_appliance(index, state: bool):
             return False
 
         if state:
-            GPIO.output(relay_pins[index], GPIO.HIGH)
+            GPIO.output(relay_pins[index], relay_output_level(True))
             return True
 
-        GPIO.output(relay_pins[index], GPIO.LOW)
+        GPIO.output(relay_pins[index], relay_output_level(False))
         return True
     except Exception as e:
         print(f"Error controlling appliance {index}: {e}")
@@ -111,7 +128,7 @@ def cleanup():
     try:
         for pin in relay_pins:
             try:
-                GPIO.output(pin, GPIO.LOW)
+                GPIO.output(pin, relay_output_level(False))
             except Exception:
                 pass
         GPIO.cleanup(relay_pins)

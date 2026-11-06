@@ -30,7 +30,8 @@ PZEM meters (Modbus RTU, IDs 1–3) → Raspberry Pi agent → Flask API → SQL
 | `sensors/pzem.py` | Modbus RTU framing and PZEM serial reader |
 | `controls/relay.py` | GPIO initialization and relay output control |
 | `utils/server.py` | Authenticated HTTP client used by the Pi |
-| `auth/rfid.py`, `manual_interface.py` | RFID helper and separate read-only manual interface; not part of `main.py` runtime |
+| `auth/rfid.py`, `main.py` | RFID allow-list and non-blocking trip-reset listener used by the Pi control runtime |
+| `manual_interface.py` | Separate read-only RFID workflow; do not run concurrently with `main.py` because both read the PZEM ports |
 | `templates/`, `static/` | Dashboard and browser assets |
 | `instance/users.db` | Default Flask SQLite database |
 | `daily_usage_state.json` | Pi local daily energy and last cumulative meter counters |
@@ -66,9 +67,9 @@ The QA procedure and project design identify a Raspberry Pi 4 Model B, three PZE
 | --- | --- | --- |
 | Meter bus | Three PZEM-004T V4 meters; native TTL UART per meter, translated through one TTL-to-RS485 transceiver per meter to a shared Modbus RTU bus; 9600 baud, 8-N-1, IDs 1, 2, 3; function 0x04 | Confirm each converter's TTL-side and RS485-side wiring, USB-to-RS485 host adapter, unique meter IDs, stable port, and CT orientation |
 | Serial ports | Slave 1 → `/dev/ttyUSB1`; slave 2 → `/dev/ttyUSB0`; slave 3 → `/dev/ttyUSB2` | Linux may renumber USB adapters after reconnecting; confirm the mapping on the target Pi |
-| Relay GPIO | BCM 17, 27, 22; physical header pins 11, 13, 15; HIGH means ON, LOW means OFF | SSR input compatibility/polarity, branch mapping, load ratings, heat sinking and electrical protection |
+| Relay GPIO | BCM 17, 27, 22; physical header pins 11, 13, 15; `SSR_ACTIVE_HIGH=1` by default, configurable per exact SSR input polarity | Confirm the module's input polarity/voltage, branch mapping, load ratings, heat sinking and electrical protection |
 | Channel order | Meter IDs 1–3 map by index to `acu`, `outlet`, `lighting` | Label and verify actual sensor → SSR → branch map before operation |
-| RFID | RC522 helper uses SPI when invoked by supported interface | `main.py` does not invoke RFID; verify separate workflow against project requirements |
+| RFID | RC522 listener uses SPI; authorized cards are configured by `RFID_RESET_IDS`; two scans within five seconds clear trip latches while keeping outputs OFF | Verify allow-list, scan behavior, and reset status on the exact installed reader |
 | Display | HDMI display; app emits terminal output and serves browser dashboard | Confirm display/browser setup; no GPIO character LCD driver is used by the active agent |
 
 The QA procedure documents unresolved interface/model mismatches. Complete its commissioning gates before connecting or energizing loads. SSR LOW is a software command, not a maintenance disconnect or proof of galvanic isolation.

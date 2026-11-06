@@ -24,7 +24,7 @@ Confirm that the exact PZEM model exposes a compatible TTL Modbus interface. Use
 4. Start with outputs disconnected from loads. Run `python hub.py` and open `http://<pi-address>:5000` from a browser on the trusted LAN.
 5. Check that measurements match the meters, then check relay polarity with a disconnected test load. The code assumes GPIO HIGH = relay ON and LOW = relay OFF.
 
-The first run leaves all relays OFF. When a sensor stops reporting valid data, its corresponding relay is switched OFF and latched as tripped. One scan of an authorized RFID card clears all trip latches; it **does not turn relays on**. Use the web controls to request ON after checking the fault.
+The first run leaves all relays OFF. When a sensor stops reporting valid data, its corresponding relay is switched OFF and latched as tripped. Scanning the same authorized RFID card twice within five seconds clears trip latches; it **does not turn relays on**. Use the web controls to request ON after checking the fault.
 
 ## Configuration
 

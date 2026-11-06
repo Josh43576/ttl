@@ -49,6 +49,7 @@ PORT_BY_SLAVE_ID = {
     2: os.getenv("PZEM_PORT_SLAVE_2", "/dev/ttyUSB0"),
     3: os.getenv("PZEM_PORT_SLAVE_3", "/dev/ttyUSB2"),
 }
+SSR_ACTIVE_HIGH = os.getenv("SSR_ACTIVE_HIGH", "1").strip().lower() not in {"0", "false", "no", "off"}
 BAUDRATE = int_list(os.getenv("PZEM_BAUDRATE", "9600"), (9600,))[0]
 SERIAL_TIMEOUT = float_setting("PZEM_TIMEOUT_SECONDS", 0.5)
 POLL_INTERVAL = float_setting("POLL_INTERVAL_SECONDS", 2.0)
@@ -57,6 +58,7 @@ VOLTAGE_SCALE = float_setting("PZEM_VOLTAGE_SCALE", 10.0)
 CURRENT_SCALE = float_setting("PZEM_CURRENT_SCALE", 1000.0)
 ENERGY_SCALE = float_setting("PZEM_ENERGY_SCALE", 1.0)
 RFID_IDS = set(int_list(os.getenv("RFID_RESET_IDS", ""), ()))
+RFID_RESET_TIMEOUT_SECONDS = 5.0
 STALE_AFTER = max(5.0, POLL_INTERVAL * 3.0)
 
 app = Flask(__name__)
@@ -173,7 +175,9 @@ def read_pzem_bus() -> list[dict]:
 def _gpio_output(key: str, is_on: bool) -> None:
     if GPIO is None:
         raise RuntimeError("RPi.GPIO unavailable; relay control is disabled on this computer")
-    GPIO.output(GPIO_PINS[KEYS.index(key)], GPIO.HIGH if is_on else GPIO.LOW)
+    active_level = GPIO.HIGH if SSR_ACTIVE_HIGH else GPIO.LOW
+    inactive_level = GPIO.LOW if SSR_ACTIVE_HIGH else GPIO.HIGH
+    GPIO.output(GPIO_PINS[KEYS.index(key)], active_level if is_on else inactive_level)
 
 
 def all_relays_off() -> None:
@@ -234,6 +238,8 @@ def rfid_loop() -> None:
 
     last_card = None
     clear_since = time.monotonic()
+    pending_card = None
+    pending_since = 0.0
     while not stop_event.is_set():
         try:
             scan = getattr(reader, "read_id_no_block", None)
@@ -241,14 +247,25 @@ def rfid_loop() -> None:
             if card_id is None:
                 last_card = None
                 clear_since = time.monotonic()
+                if pending_card is not None and time.monotonic() - pending_since > RFID_RESET_TIMEOUT_SECONDS:
+                    pending_card = None
+                    with lock:
+                        state["rfid_status"] = "RFID reset confirmation expired"
             elif card_id != last_card and time.monotonic() - clear_since >= 0.5:
                 last_card = card_id
                 with lock:
                     if card_id in RFID_IDS:
-                        all_relays_off()
-                        state["tripped"] = {key: False for key in KEYS}
-                        state["rfid_status"] = "Authorized scan: trips cleared; all relays remain OFF"
+                        if pending_card == card_id and time.monotonic() - pending_since <= RFID_RESET_TIMEOUT_SECONDS:
+                            all_relays_off()
+                            state["tripped"] = {key: False for key in KEYS}
+                            state["rfid_status"] = "Authorized reset: trips cleared; all relays remain OFF"
+                            pending_card = None
+                        else:
+                            pending_card = card_id
+                            pending_since = time.monotonic()
+                            state["rfid_status"] = "Authorized card: scan the same card again within 5 seconds to reset"
                     else:
+                        pending_card = None
                         state["rfid_status"] = "Unrecognized RFID card"
             time.sleep(0.15)
         except Exception as exc:
@@ -358,8 +375,9 @@ def initialize_hardware() -> None:
         return
     GPIO.setwarnings(False)
     GPIO.setmode(GPIO.BCM)
+    inactive_level = GPIO.LOW if SSR_ACTIVE_HIGH else GPIO.HIGH
     for pin in GPIO_PINS:
-        GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+        GPIO.setup(pin, GPIO.OUT, initial=inactive_level)
     all_relays_off()
 
 
