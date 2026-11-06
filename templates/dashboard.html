@@ -22,8 +22,9 @@
             {% set channel_keys = ['acu', 'outlet', 'lighting'] %}
             {% for index in range(3) %}
                 {% set key = channel_keys[index] %}
-                <article class="load-card" data-card="{{ index }}">
-                    <div class="card-topline"><div class="channel-meta"><span class="channel-id">CH {{ '%02d' % (index + 1) }}</span><h2>{{ appliance_configs[key].display_name }}</h2><small>Sensor slave {{ index + 1 }}</small></div>
+                {% set slave_id = sensor_id_by_device[key] %}
+                <article class="load-card" data-card="{{ index }}" data-slave="{{ slave_id }}">
+                    <div class="card-topline"><div class="channel-meta"><span class="channel-id">CH {{ '%02d' % (index + 1) }}</span><h2>{{ appliance_configs[key].display_name }}</h2><small>Sensor slave {{ slave_id }}</small></div>
                         <label class="breaker-toggle" aria-label="Request appliance power"><input type="checkbox" data-channel="{{ index }}" {% if appliance_states[index] == 'ON' %}checked{% endif %} {% if not can_control %}disabled{% endif %}><span class="breaker-slider"></span></label>
                     </div>
                     <div class="metric-grid">
@@ -32,7 +33,7 @@
                         <div class="metric-box"><div><label>Energy</label><strong class="metric-value" data-field="energy">-- kWh</strong></div></div>
                     </div>
                     <div class="gauge-panel"><div class="gauge-ring" data-progress="0"><div class="gauge-value"><span data-field="power">-- W</span><small data-field="timestamp">Awaiting telemetry</small></div></div></div>
-                    <p class="sensor-status" data-sensor="{{ index + 1 }}">Sensor status: unknown</p>
+                    <p class="sensor-status" data-sensor="{{ slave_id }}">Sensor status: unknown</p>
                     <p class="trip-status" data-trip-status="{{ index }}" hidden>Power cutoff is latched. Check the load, scan an authorized RFID card twice within 5 seconds to clear the latch; outputs stay OFF until requested again.</p>
                 </article>
             {% endfor %}
@@ -52,7 +53,8 @@
             <p class="history-status" id="historyStatus" aria-live="polite">Choose a date to load saved readings.</p>
             <div class="history-summary">
                 <article class="history-total"><span>Total energy used</span><strong data-daily-total>-- kWh</strong></article>
-                {% for slave_id, key in [(1, 'acu'), (2, 'outlet'), (3, 'lighting')] %}
+                {% for key in channel_keys %}
+                    {% set slave_id = sensor_id_by_device[key] %}
                     <article class="history-channel"><span>{{ appliance_configs[key].display_name }}</span><small>Slave {{ slave_id }}</small><strong data-daily-kwh="{{ slave_id }}">-- kWh</strong></article>
                 {% endfor %}
             </div>
@@ -66,7 +68,7 @@
             <label><span>Total system cap (W)</span><input type="number" data-total-limit value="{{ preset_limit }}" min="1" step="10" {% if not can_control %}disabled{% endif %}></label>
             {% for key in channel_keys %}<label><span>{{ appliance_configs[key].display_name }} limit (W)</span><input type="number" data-limit="{{ key }}" value="{{ '%.3f'|format(appliance_configs[key].kw_limit * 1000) }}" min="1" step="1" {% if not can_control %}disabled{% endif %}></label>{% endfor %}
         </div><p>Changes are saved to the server and read by the Raspberry Pi.</p></article>
-        <article class="settings-card"><h4>Sensor diagnostics</h4><ul class="diag-list"><li><span>Slave 1 ACU adapter</span><strong>/dev/ttyUSB1</strong></li><li><span>Slave 2 Outlet adapter</span><strong>/dev/ttyUSB0</strong></li><li><span>Slave 3 Lighting adapter</span><strong>/dev/ttyUSB2</strong></li>{% for index in range(1, 4) %}<li><span>Modbus slave {{ index }} status</span><strong data-sensor="{{ index }}">UNKNOWN</strong></li>{% endfor %}</ul></article>
+        <article class="settings-card"><h4>Sensor diagnostics</h4><ul class="diag-list">{% for key in channel_keys %}{% set slave_id = sensor_id_by_device[key] %}<li><span>Slave {{ slave_id }} {{ appliance_configs[key].display_name }} adapter</span><strong>{{ pzem_port_by_slave_id[slave_id] }}</strong></li>{% endfor %}{% for index in range(1, 4) %}<li><span>Modbus slave {{ index }} status</span><strong data-sensor="{{ index }}">UNKNOWN</strong></li>{% endfor %}</ul></article>
         <article class="settings-card"><h4>Operating mode</h4><p>Monitoring-only mode is configured on the Raspberry Pi with BASELINE_MODE. Relay requests are enforced by the device agent. An authorized RFID card must be scanned twice within 5 seconds to clear a trip latch; reset leaves all outputs OFF.</p></article></div>
     </section></main>
 
@@ -136,7 +138,7 @@ function drawLoadSeries(series) {
     }
 
     const colors = {1: '#63d8ff', 2: '#a78bfa', 3: '#61e6a5'};
-    const labels = {1: 'Slave 1', 2: 'Slave 2', 3: 'Slave 3'};
+    const labels = {1: 'Lighting (Slave 1)', 2: 'ACU (Slave 2)', 3: 'SPO (Slave 3)'};
     const powerValues = series.flatMap(point => [point.slave_1, point.slave_2, point.slave_3]
         .filter(value => value !== null && Number.isFinite(Number(value))).map(Number));
     const maxPower = Math.max(10, Math.ceil(Math.max(...powerValues) / 10) * 10);
@@ -197,14 +199,15 @@ async function updateTelemetry() {
         const powers = [0, 0, 0];
         const sensorStates = [0, 0, 0];
         for (const reading of readings) {
-            const index = Number(reading.slave_id) - 1;
-            if (!Number.isInteger(index) || index < 0 || index > 2) continue;
-            const card = document.querySelector(`[data-card="${index}"]`);
+            const slaveId = Number(reading.slave_id);
+            if (!Number.isInteger(slaveId) || slaveId < 1 || slaveId > 3) continue;
+            const card = document.querySelector(`[data-slave="${slaveId}"]`);
             if (!card) continue;
+            const index = Number(card.dataset.card);
             const ageMs = reading.date_recorded ? Date.now() - new Date(reading.date_recorded + 'Z').getTime() : Infinity;
             const display = (value, digits, suffix, scale = 1) => Number.isFinite(Number(value)) && value !== null ? `${(Number(value) / scale).toFixed(digits)} ${suffix}` : `-- ${suffix}`;
             const isFresh = Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= 15000;
-            sensorStates[index] = isFresh ? 1 : 2;
+            sensorStates[slaveId - 1] = isFresh ? 1 : 2;
             if (isFresh) {
                 powers[index] = Number(reading.power) || 0;
                 card.querySelector('[data-field="voltage"]').textContent = display(reading.voltage, 1, 'V');

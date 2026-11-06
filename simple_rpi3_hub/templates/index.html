@@ -22,7 +22,7 @@
     <section class="grid" aria-label="PZEM telemetry">
       {% for key in keys %}
       <article class="card" id="card-{{ key }}">
-        <div class="card-head"><div><div class="eyebrow">SLAVE {{ loop.index }}</div><h2>{{ names[key] }}</h2></div><span class="trip-pill" id="trip-{{ key }}">NORMAL</span></div>
+        <div class="card-head"><div><div class="eyebrow">SLAVE {{ slave_id_by_key[key] }}</div><h2>{{ names[key] }}</h2></div><span class="trip-pill" id="trip-{{ key }}">NORMAL</span></div>
         <div class="power-reading"><span id="power-{{ key }}">--</span><small>W</small></div>
         <div class="measurements">
           <div><span>Voltage</span><strong id="voltage-{{ key }}">-- V</strong></div>

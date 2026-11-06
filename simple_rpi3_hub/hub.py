@@ -37,6 +37,7 @@ def float_setting(name: str, default: float, minimum: float = 0.05) -> float:
 
 KEYS = ("acu", "outlet", "lighting")
 NAMES = {"acu": "ACU", "outlet": "Outlet", "lighting": "Lighting"}
+SLAVE_ID_BY_KEY = {"acu": 2, "outlet": 3, "lighting": 1}
 GPIO_PINS = int_list(os.getenv("RELAY_GPIO_PINS", "17,27,22"), (17, 27, 22))
 SLAVE_IDS = int_list(os.getenv("PZEM_SLAVE_IDS", "1,2,3"), (1, 2, 3))[:3]
 if len(GPIO_PINS) != 3 or len(set(GPIO_PINS)) != 3:
@@ -87,7 +88,7 @@ except ImportError:
 
 lock = threading.RLock()
 state = {
-    "readings": {key: {"slave_id": SLAVE_IDS[i], "voltage": None, "current": None,
+    "readings": {key: {"slave_id": SLAVE_ID_BY_KEY[key], "voltage": None, "current": None,
                        "power": None, "energy": None, "error": "Waiting for first poll"}
                  for i, key in enumerate(KEYS)},
     "relays": {key: False for key in KEYS},
@@ -205,7 +206,12 @@ def telemetry_loop() -> None:
             fresh_rows = read_pzem_bus()
             now = time.time()
             with lock:
-                for key, row in zip(KEYS, fresh_rows):
+                rows_by_slave = {row["slave_id"]: row for row in fresh_rows}
+                for key in KEYS:
+                    row = rows_by_slave.get(SLAVE_ID_BY_KEY[key], {
+                        "slave_id": SLAVE_ID_BY_KEY[key], "voltage": None, "current": None,
+                        "power": None, "energy": None, "error": "No reading returned for this slave",
+                    })
                     state["readings"][key] = row
                     if row["error"] or row["power"] is None:
                         trip_channel(key, row["error"] or "No valid power reading")
@@ -329,7 +335,8 @@ def logout():
 
 @app.route("/")
 def dashboard():
-    return render_template("index.html", csrf=csrf_token(), keys=KEYS, names=NAMES)
+    return render_template("index.html", csrf=csrf_token(), keys=KEYS, names=NAMES,
+                           slave_id_by_key=SLAVE_ID_BY_KEY)
 
 
 @app.route("/api/status")

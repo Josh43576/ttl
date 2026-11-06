@@ -26,6 +26,8 @@ DEFAULT_APPLIANCE_CONFIGS = {
     "outlet": {"display_name": "3-Gang Outlet", "kw_limit": 5.0},
     "lighting": {"display_name": "Lighting Circuit", "kw_limit": 2.0},
 }
+SENSOR_ID_BY_DEVICE = {"acu": 2, "outlet": 3, "lighting": 1}
+PZEM_PORT_BY_SLAVE_ID = {1: "/dev/ttyUSB1", 2: "/dev/ttyUSB0", 3: "/dev/ttyUSB2"}
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or secrets.token_hex(32)
 app.config.update(
@@ -591,6 +593,8 @@ def dashboard():
         user_display_name=display_name,
         history_today=local_today.isoformat(),
         history_min=(local_today - datetime.timedelta(days=29)).isoformat(),
+        sensor_id_by_device=SENSOR_ID_BY_DEVICE,
+        pzem_port_by_slave_id=PZEM_PORT_BY_SLAVE_ID,
     )
 
 @app.route("/api/control", methods=["GET", "POST"])

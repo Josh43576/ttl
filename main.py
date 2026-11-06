@@ -25,7 +25,7 @@ from utils.server import (
 shutdown_requested = False
 BASELINE_MODE = os.environ.get("BASELINE_MODE", "1").strip().lower() in {"1", "true", "yes"}
 DEVICE_KEYS = ("acu", "outlet", "lighting")
-SENSOR_ID_BY_DEVICE = {"acu": 1, "outlet": 2, "lighting": 3}
+SENSOR_ID_BY_DEVICE = {"acu": 2, "outlet": 3, "lighting": 1}
 DEFAULT_APPLIANCE_NAMES = ["Appliance 1", "Appliance 2", "Appliance 3"]
 appliance_names = DEFAULT_APPLIANCE_NAMES.copy()
 root_dir = os.path.dirname(os.path.abspath(__file__))
