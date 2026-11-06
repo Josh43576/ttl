@@ -63,16 +63,16 @@
         </section>
     </main>
 
-    <main class="view-shell settings-view" id="settingsView"><section class="settings-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Device settings</p><h3>Appliance limits</h3></div></div>
-        <div class="settings-grid"><article class="settings-card"><h4>Power limits</h4><div class="form-grid">
-            <label><span>Total system cap (W)</span><input type="number" data-total-limit value="{{ preset_limit }}" min="1" step="10" {% if not can_control %}disabled{% endif %}></label>
-            {% for key in channel_keys %}<label><span>{{ appliance_configs[key].display_name }} limit (W)</span><input type="number" data-limit="{{ key }}" value="{{ '%.3f'|format(appliance_configs[key].kw_limit * 1000) }}" min="1" step="1" {% if not can_control %}disabled{% endif %}></label>{% endfor %}
-        </div><p>Changes are saved to the server and read by the Raspberry Pi.</p></article>
+    <main class="view-shell settings-view" id="settingsView"><section class="settings-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Device settings</p><h3>Energy and power limits</h3></div></div>
+        <div class="settings-grid"><article class="settings-card"><h4>Daily circuit energy budgets</h4><div class="form-grid">
+            <label><span>Total system instantaneous cap (W)</span><input type="number" data-total-limit value="{{ preset_limit }}" min="1" step="10" {% if not can_control %}disabled{% endif %}></label>
+            {% for key in channel_keys %}<label><span>{{ appliance_configs[key].display_name }} daily energy limit (Wh)</span><input type="number" data-limit="{{ key }}" value="{{ '%.1f'|format(appliance_configs[key].energy_limit_wh) }}" min="1" step="1" {% if not can_control %}disabled{% endif %}></label>{% endfor %}
+        </div><p>Circuit budgets accumulate meter energy during the day and reset at midnight. Example: 500 Wh = 0.5 kWh. The separate total system cap is instantaneous watts.</p></article>
         <article class="settings-card"><h4>Sensor diagnostics</h4><ul class="diag-list">{% for key in channel_keys %}{% set slave_id = sensor_id_by_device[key] %}<li><span>Slave {{ slave_id }} {{ appliance_configs[key].display_name }} adapter</span><strong>{{ pzem_port_by_slave_id[slave_id] }}</strong></li>{% endfor %}{% for index in range(1, 4) %}<li><span>Modbus slave {{ index }} status</span><strong data-sensor="{{ index }}">UNKNOWN</strong></li>{% endfor %}</ul></article>
         <article class="settings-card"><h4>Operating mode</h4><p>Monitoring-only mode is configured on the Raspberry Pi with BASELINE_MODE. Relay requests are enforced by the device agent. An authorized RFID card must be scanned twice within 5 seconds to clear a trip latch; reset leaves all outputs OFF.</p></article></div>
     </section></main>
 
-    <main class="view-shell help-view" id="helpView"><section class="help-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Support</p><h3>Operating notes</h3></div></div><ol class="manual-list"><li>Confirm the sensor diagnostics report current readings and match the physical circuit.</li><li>Set each channel limit in watts (W); the system cap is also in watts.</li><li>Use the channel switches to request power. The Pi rejects ON requests on sensor or configuration failure.</li><li>Verify relay polarity and wiring on a disconnected test load before connecting appliances.</li></ol></section></main>
+    <main class="view-shell help-view" id="helpView"><section class="help-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Support</p><h3>Operating notes</h3></div></div><ol class="manual-list"><li>Confirm sensor diagnostics match each physical circuit.</li><li>Each circuit’s Wh budget is based on accumulated daily meter energy and resets at midnight.</li><li>The total system cap remains an instantaneous W cutoff.</li><li>The Pi rejects ON requests on sensor or configuration failure. Verify relay polarity and wiring with a safe test setup.</li></ol></section></main>
 </div>
 
 <div class="fab-stack" aria-label="Primary navigation" role="navigation">
@@ -267,7 +267,7 @@ document.querySelectorAll('[data-limit]').forEach(input => input.addEventListene
     const value = Number(input.value);
     if (!Number.isFinite(value) || value <= 0) { alert('Limit must be a positive number.'); return; }
     input.disabled = true;
-    try { await postJson('/api/appliance-config', {[key]: {kw_limit: value / 1000}}); }
+    try { await postJson('/api/appliance-config', {[key]: {energy_limit_wh: value}}); }
     catch (error) { alert(error.message); }
     finally { input.disabled = false; }
 }));

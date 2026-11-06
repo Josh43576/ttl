@@ -88,10 +88,14 @@ def load_daily_state():
         daily_total = float(state.get("daily_energy_kwh", 0.0) or 0.0)
     except (TypeError, ValueError):
         daily_total = 0.0
+    daily_by_slave = state.get("daily_energy_wh_by_slave", {})
+    if not isinstance(daily_by_slave, dict):
+        daily_by_slave = {}
     return {
         "date": state.get("date"),
         "daily_energy_kwh": daily_total if math.isfinite(daily_total) and daily_total >= 0 else 0.0,
         "last_energy_wh": state.get("last_energy_wh", {}) if isinstance(state.get("last_energy_wh", {}), dict) else {},
+        "daily_energy_wh_by_slave": daily_by_slave,
     }
 
 
@@ -99,7 +103,8 @@ def update_daily_energy(readings, state, today=None):
     """Accumulate differences between each PZEM's cumulative Wh counter."""
     today = today or date.today().isoformat()
     if state.get("date") != today:
-        state = {"date": today, "daily_energy_kwh": 0.0, "last_energy_wh": {}}
+        state = {"date": today, "daily_energy_kwh": 0.0, "last_energy_wh": {},
+                 "daily_energy_wh_by_slave": {}}
     previous_values = state.setdefault("last_energy_wh", {})
     if not isinstance(previous_values, dict):
         previous_values = {}
@@ -109,6 +114,10 @@ def update_daily_energy(readings, state, today=None):
     except (TypeError, ValueError):
         total_today = 0.0
     state["daily_energy_kwh"] = total_today if math.isfinite(total_today) and total_today >= 0 else 0.0
+    daily_by_slave = state.setdefault("daily_energy_wh_by_slave", {})
+    if not isinstance(daily_by_slave, dict):
+        daily_by_slave = {}
+        state["daily_energy_wh_by_slave"] = daily_by_slave
     for reading in readings:
         if not isinstance(reading, dict) or reading.get("error"):
             continue
@@ -119,6 +128,12 @@ def update_daily_energy(readings, state, today=None):
             continue
         if not math.isfinite(energy_wh) or energy_wh < 0:
             continue
+        try:
+            daily_used = float(daily_by_slave.get(slave_id, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            daily_used = 0.0
+        if not math.isfinite(daily_used) or daily_used < 0:
+            daily_used = 0.0
         previous = previous_values.get(slave_id)
         if previous is not None:
             try:
@@ -130,13 +145,16 @@ def update_daily_energy(readings, state, today=None):
         if previous is not None:
             delta = energy_wh - previous if energy_wh >= previous else energy_wh
             state["daily_energy_kwh"] += delta / 1000.0
+            daily_by_slave[slave_id] = daily_used + delta
+        else:
+            daily_by_slave.setdefault(slave_id, daily_used)
         previous_values[slave_id] = energy_wh
     state["updated_at"] = utc_now().isoformat()
     _atomic_json_write(state_file, state)
     return state
 
 
-def append_history(event_type, message, value_watts=0.0, preset_limit=0.0):
+def append_history(event_type, message, value=0.0, limit=0.0, unit="W"):
     try:
         with open(history_file, encoding="utf-8") as source:
             events = json.load(source)
@@ -144,9 +162,13 @@ def append_history(event_type, message, value_watts=0.0, preset_limit=0.0):
             events = []
     except (OSError, ValueError):
         events = []
-    events.append({"timestamp": utc_now().isoformat(), "event_type": event_type,
-                   "message": message, "value_watts": value_watts,
-                   "preset_limit": preset_limit})
+    event = {"timestamp": utc_now().isoformat(), "event_type": event_type,
+             "message": message, "unit": unit}
+    if unit == "Wh":
+        event.update({"value_wh": value, "energy_limit_wh": limit})
+    else:
+        event.update({"value_watts": value, "preset_limit": limit})
+    events.append(event)
     _atomic_json_write(history_file, events[-10000:])
 
 
@@ -229,7 +251,7 @@ def configured_limits(configs):
     limits = {}
     for key in DEVICE_KEYS:
         try:
-            value = float(configs[key]["kw_limit"])
+            value = float(configs[key]["energy_limit_wh"])
         except (KeyError, TypeError, ValueError):
             return None
         if not math.isfinite(value) or value <= 0:
@@ -244,6 +266,7 @@ def apply_commands(readings, commands, limits):
         commands = {}
     requested_states = commands.get("appliances")
     tripped_states = commands.get("tripped")
+    daily_energy_wh_by_slave = commands.get("daily_energy_wh_by_slave", {})
     if (
         not commands.get("connected")
         or limits is None
@@ -293,20 +316,25 @@ def apply_commands(readings, commands, limits):
             reported_cutoffs.discard(index)
             control_appliance(index, False)
             continue
-        if power is None:
+        sensor_id = SENSOR_ID_BY_DEVICE[key]
+        try:
+            energy_used_wh = float(daily_energy_wh_by_slave.get(str(sensor_id)))
+        except (AttributeError, TypeError, ValueError):
+            energy_used_wh = None
+        if power is None or energy_used_wh is None or not math.isfinite(energy_used_wh) or energy_used_wh < 0:
             control_appliance(index, False)
             if index not in reported_cutoffs:
-                report_trip(index, 0.0, limits[key] * 1000.0 if limits else 0.0, "sensor_fault")
-                append_history("sensor_fault", f"{key} has no valid power reading; relay forced OFF.")
+                report_trip(index, 0.0, limits[key] if limits else 0.0, "sensor_fault", unit="Wh")
+                append_history("sensor_fault", f"{key} has no valid power or energy reading; relay forced OFF.")
                 reported_cutoffs.add(index)
             continue
-        limit_watts = limits[key] * 1000.0
-        allowed = power < limit_watts
+        energy_limit_wh = limits[key]
+        allowed = energy_used_wh < energy_limit_wh
         if not allowed:
             control_appliance(index, False)
             if index not in reported_cutoffs:
-                report_trip(index, power, limit_watts)
-                append_history("power_cutoff", f"{key} exceeded its {limits[key]:.2f} kW limit.", power, limit_watts)
+                report_trip(index, energy_used_wh, energy_limit_wh, "energy_limit", unit="Wh")
+                append_history("energy_cutoff", f"{key} used {energy_used_wh:.1f} Wh and reached its {energy_limit_wh:.1f} Wh daily energy limit.", energy_used_wh, energy_limit_wh, unit="Wh")
                 reported_cutoffs.add(index)
         else:
             reported_cutoffs.discard(index)
@@ -349,6 +377,7 @@ def main():
                 commands = get_control_commands()
                 configs = get_appliance_configs()
                 limits = configured_limits(configs) if configs is not None else None
+                commands["daily_energy_wh_by_slave"] = state.get("daily_energy_wh_by_slave", {})
                 apply_commands(readings, commands, limits)
             time.sleep(5)
     except Exception as exc:

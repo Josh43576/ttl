@@ -22,9 +22,9 @@ APP_TIMEZONE = ZoneInfo(APP_TIMEZONE_NAME)
 app = Flask(__name__)
 DEFAULT_PRESET_LIMIT = 500.0
 DEFAULT_APPLIANCE_CONFIGS = {
-    "acu": {"display_name": "ACU Unit", "kw_limit": 10.0},
-    "outlet": {"display_name": "3-Gang Outlet", "kw_limit": 5.0},
-    "lighting": {"display_name": "Lighting Circuit", "kw_limit": 2.0},
+    "acu": {"display_name": "ACU Unit", "kw_limit": 10.0, "energy_limit_wh": 500.0},
+    "outlet": {"display_name": "3-Gang Outlet", "kw_limit": 5.0, "energy_limit_wh": 500.0},
+    "lighting": {"display_name": "Lighting Circuit", "kw_limit": 2.0, "energy_limit_wh": 500.0},
 }
 SENSOR_ID_BY_DEVICE = {"acu": 2, "outlet": 3, "lighting": 1}
 PZEM_PORT_BY_SLAVE_ID = {1: "/dev/ttyUSB1", 2: "/dev/ttyUSB0", 3: "/dev/ttyUSB2"}
@@ -106,6 +106,7 @@ class ApplianceConfig(db.Model):
     appliance_key = db.Column(db.String(50), unique=True, nullable=False)
     display_name = db.Column(db.String(100), nullable=False)
     kw_limit = db.Column(db.Float, default=10.0, nullable=False)
+    energy_limit_wh = db.Column(db.Float, default=500.0, nullable=False)
     is_tripped = db.Column(db.Boolean, default=False)
     requested_state = db.Column(db.String(3), nullable=False, default='OFF')
     updated_at = db.Column(db.DateTime, default=utcnow_naive)
@@ -118,6 +119,8 @@ class PowerEvent(db.Model):
     event_type = db.Column(db.String(50), nullable=False)
     value_watts = db.Column(db.Float, default=0.0)
     preset_limit = db.Column(db.Float, default=0.0)
+    value_wh = db.Column(db.Float)
+    energy_limit_wh = db.Column(db.Float)
     message = db.Column(db.String(255), default="")
     created_at = db.Column(db.DateTime, default=utcnow_naive)
 
@@ -186,6 +189,7 @@ def ensure_appliance_configs():
                 appliance_key=appliance_key,
                 display_name=config["display_name"],
                 kw_limit=float(config["kw_limit"]),
+                energy_limit_wh=float(config["energy_limit_wh"]),
                 is_tripped=False,
                 requested_state='OFF',
             ))
@@ -196,6 +200,9 @@ def ensure_appliance_configs():
                 changed = True
             if existing.kw_limit is None:
                 existing.kw_limit = float(config["kw_limit"])
+                changed = True
+            if existing.energy_limit_wh is None:
+                existing.energy_limit_wh = float(config["energy_limit_wh"])
                 changed = True
             if not existing.requested_state:
                 existing.requested_state = 'OFF'
@@ -222,12 +229,14 @@ def get_appliance_configs():
         payload[entry.appliance_key] = {
             "display_name": entry.display_name,
             "kw_limit": float(entry.kw_limit or 0.0),
+            "energy_limit_wh": float(entry.energy_limit_wh or 0.0),
             "is_tripped": bool(entry.is_tripped),
         }
     for key, defaults in DEFAULT_APPLIANCE_CONFIGS.items():
         payload.setdefault(key, {
             "display_name": defaults["display_name"],
             "kw_limit": float(defaults["kw_limit"]),
+            "energy_limit_wh": float(defaults["energy_limit_wh"]),
             "is_tripped": False,
         })
     return payload
@@ -311,6 +320,14 @@ def migrate_schema():
         columns = {column['name'] for column in inspector.get_columns('appliance_configs')}
         if 'requested_state' not in columns:
             db.session.execute(text("ALTER TABLE appliance_configs ADD COLUMN requested_state VARCHAR(3) NOT NULL DEFAULT 'OFF'"))
+        if 'energy_limit_wh' not in columns:
+            db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN energy_limit_wh FLOAT NOT NULL DEFAULT 500.0'))
+    if 'power_events' in tables:
+        columns = {column['name'] for column in inspector.get_columns('power_events')}
+        if 'value_wh' not in columns:
+            db.session.execute(text('ALTER TABLE power_events ADD COLUMN value_wh FLOAT'))
+        if 'energy_limit_wh' not in columns:
+            db.session.execute(text('ALTER TABLE power_events ADD COLUMN energy_limit_wh FLOAT'))
     db.session.commit()
 
 
@@ -683,12 +700,19 @@ def api_device_trip():
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify({'error': 'payload must be an object'}), 400
+    unit = str(payload.get('unit', 'W'))
+    if unit == 'Wh':
+        value_field, limit_field = 'value_wh', 'limit_wh'
+    elif unit == 'W':
+        value_field, limit_field = 'value_watts', 'limit_watts'
+    else:
+        return jsonify({'error': 'unit must be W or Wh'}), 400
     try:
         index = int(payload['index'])
-        value = float(payload['value_watts'])
-        limit = float(payload['limit_watts'])
+        value = float(payload[value_field])
+        limit = float(payload[limit_field])
     except (KeyError, TypeError, ValueError):
-        return jsonify({'error': 'index and watt values are required'}), 400
+        return jsonify({'error': 'index and matching value/limit measurements are required'}), 400
     entries = ordered_appliance_configs()
     if index not in range(3) or not math.isfinite(value) or not math.isfinite(limit):
         return jsonify({'error': 'invalid trip data'}), 400
@@ -698,8 +722,14 @@ def api_device_trip():
     entry.updated_at = utcnow_naive()
     reason = str(payload.get('reason', 'power_limit'))[:50]
     message = f'{entry.display_name} cutoff: {reason}.'
-    db.session.add(PowerEvent(event_type=reason, value_watts=value,
-                              preset_limit=limit, message=message))
+    event = PowerEvent(event_type=reason, message=message)
+    if unit == 'Wh':
+        event.value_wh = value
+        event.energy_limit_wh = limit
+    else:
+        event.value_watts = value
+        event.preset_limit = limit
+    db.session.add(event)
     db.session.commit()
     return jsonify({'status': 'tripped', 'appliances': [item.requested_state for item in entries]}), 200
 
@@ -934,24 +964,25 @@ def api_appliance_config():
             if not isinstance(config, dict):
                 continue
             try:
-                limit = float(config.get("kw_limit", DEFAULT_APPLIANCE_CONFIGS[appliance_key]["kw_limit"]))
+                limit = float(config.get("energy_limit_wh", DEFAULT_APPLIANCE_CONFIGS[appliance_key]["energy_limit_wh"]))
             except (TypeError, ValueError):
-                return jsonify({"error": "kw_limit must be a number"}), 400
+                return jsonify({"error": "energy_limit_wh must be a number"}), 400
             if not math.isfinite(limit) or limit <= 0:
-                return jsonify({"error": "kw_limit must be a positive finite number"}), 400
+                return jsonify({"error": "energy_limit_wh must be a positive finite number"}), 400
             entry = ApplianceConfig.query.filter_by(appliance_key=appliance_key).first()
             if entry is None:
                 entry = ApplianceConfig(
                     appliance_key=appliance_key,
                     display_name=str(config.get("display_name") or DEFAULT_APPLIANCE_CONFIGS.get(appliance_key, {}).get("display_name", appliance_key.title())),
-                    kw_limit=limit,
+                    kw_limit=float(DEFAULT_APPLIANCE_CONFIGS[appliance_key]["kw_limit"]),
+                    energy_limit_wh=limit,
                 )
                 db.session.add(entry)
             else:
                 if "display_name" in config:
                     entry.display_name = str(config["display_name"]) or entry.display_name
-                if "kw_limit" in config:
-                    entry.kw_limit = limit
+                if "energy_limit_wh" in config:
+                    entry.energy_limit_wh = limit
             entry.updated_at = utcnow_naive()
         db.session.commit()
         return jsonify({"configs": get_appliance_configs(), "status": "updated"})
@@ -1027,6 +1058,8 @@ def api_power_events():
         "event_type": event.event_type,
         "value_watts": event.value_watts,
         "preset_limit": event.preset_limit,
+        "value_wh": event.value_wh,
+        "energy_limit_wh": event.energy_limit_wh,
         "message": event.message,
         "created_at": event.created_at.isoformat() if event.created_at else None,
     } for event in events]

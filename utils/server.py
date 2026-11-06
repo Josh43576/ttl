@@ -85,12 +85,13 @@ def get_appliance_configs():
         return None
 
 
-def report_trip(index, value_watts, limit_watts, reason="power_limit"):
+def report_trip(index, value, limit, reason="power_limit", unit="W"):
+    measurements = ({"value_wh": value, "limit_wh": limit} if unit == "Wh"
+                    else {"value_watts": value, "limit_watts": limit})
     try:
         response = requests.post(
             f"{API_BASE_URL}/api/device-trip",
-            json={"index": index, "value_watts": value_watts,
-                  "limit_watts": limit_watts, "reason": reason},
+            json={"index": index, **measurements, "unit": unit, "reason": reason},
             headers=_headers(), timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
