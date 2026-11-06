@@ -249,6 +249,13 @@ def rfid_loop() -> None:
             state["rfid_status"] = "RFID library unavailable; reset disabled"
         return
     try:
+        if GPIO is None:
+            raise RuntimeError("RPi.GPIO unavailable")
+        current_mode = GPIO.getmode()
+        if current_mode is None:
+            GPIO.setmode(GPIO.BCM)
+        elif current_mode != GPIO.BCM:
+            raise RuntimeError("GPIO is already configured for BOARD numbering; RFID_RST_GPIO uses BCM numbering")
         reader = create_rfid_reader()
     except Exception as exc:
         with lock:

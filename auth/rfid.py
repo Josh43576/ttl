@@ -14,6 +14,11 @@ except ModuleNotFoundError:
     MFRC522 = None
     SimpleMFRC522 = None
 
+try:
+    import RPi.GPIO as GPIO
+except ModuleNotFoundError:
+    GPIO = None
+
 
 def _new_reader():
     """Build the standard reader with RST on a GPIO not used by the relays."""
@@ -91,7 +96,15 @@ def init_reader():
     if SimpleMFRC522 is None:
         print("RFID library unavailable; RFID reset is disabled.")
         return False
+    if GPIO is None:
+        print("RPi.GPIO unavailable; RFID reset is disabled.")
+        return False
     try:
+        current_mode = GPIO.getmode()
+        if current_mode is None:
+            GPIO.setmode(GPIO.BCM)
+        elif current_mode != GPIO.BCM:
+            raise RuntimeError("GPIO is already configured for BOARD numbering; RFID_RST_GPIO uses BCM numbering")
         reader = _new_reader()
         return True
     except Exception as exc:
