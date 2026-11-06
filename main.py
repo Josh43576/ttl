@@ -25,6 +25,7 @@ from utils.server import (
 shutdown_requested = False
 BASELINE_MODE = os.environ.get("BASELINE_MODE", "1").strip().lower() in {"1", "true", "yes"}
 DEVICE_KEYS = ("acu", "outlet", "lighting")
+SENSOR_ID_BY_DEVICE = {"acu": 1, "outlet": 2, "lighting": 3}
 DEFAULT_APPLIANCE_NAMES = ["Appliance 1", "Appliance 2", "Appliance 3"]
 appliance_names = DEFAULT_APPLIANCE_NAMES.copy()
 root_dir = os.path.dirname(os.path.abspath(__file__))
@@ -266,7 +267,7 @@ def apply_commands(readings, commands, limits):
                 continue
             if 1 <= slave <= 3:
                 by_slave[slave] = reading
-    channel_readings = [by_slave.get(index + 1) for index in range(3)]
+    channel_readings = [by_slave.get(SENSOR_ID_BY_DEVICE[key]) for key in DEVICE_KEYS]
     measured = [valid_power(reading) if isinstance(reading, dict) else None for reading in channel_readings]
     try:
         total_limit = float(commands.get("preset_limit"))

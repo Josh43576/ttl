@@ -41,27 +41,151 @@
 
     <main class="view-shell analytics-view" id="analyticsView"><section class="analytics-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Live telemetry</p><h3>Latest measured power by channel</h3></div></div><div class="analytics-chart-wrap"><canvas id="analyticsChart" width="1100" height="420" aria-label="Latest power measurements"></canvas></div></section></main>
 
+    <main class="view-shell history-view" id="historyView">
+        <section class="history-panel glass-panel">
+            <div class="history-toolbar">
+                <div class="analytics-header"><div><p class="eyebrow">Monitoring only</p><h3>Daily consumption and load</h3></div></div>
+                <label class="history-date-label" for="historyDate">Choose a day
+                    <input id="historyDate" type="date" value="{{ history_today }}" min="{{ history_min }}" max="{{ history_today }}">
+                </label>
+            </div>
+            <p class="history-status" id="historyStatus" aria-live="polite">Choose a date to load saved readings.</p>
+            <div class="history-summary">
+                <article class="history-total"><span>Total energy used</span><strong data-daily-total>-- kWh</strong></article>
+                {% for slave_id, key in [(1, 'acu'), (2, 'outlet'), (3, 'lighting')] %}
+                    <article class="history-channel"><span>{{ appliance_configs[key].display_name }}</span><small>Slave {{ slave_id }}</small><strong data-daily-kwh="{{ slave_id }}">-- kWh</strong></article>
+                {% endfor %}
+            </div>
+            <div class="history-chart-wrap"><canvas id="dailyLoadChart" width="1200" height="460" aria-label="Five-minute average power for the selected day"></canvas></div>
+            <p class="history-footnote">Graph shows five-minute average power in watts. History is available for the most recent 30 days.</p>
+        </section>
+    </main>
+
     <main class="view-shell settings-view" id="settingsView"><section class="settings-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Device settings</p><h3>Appliance limits</h3></div></div>
         <div class="settings-grid"><article class="settings-card"><h4>Power limits</h4><div class="form-grid">
             <label><span>Total system cap (W)</span><input type="number" data-total-limit value="{{ preset_limit }}" min="1" step="10" {% if not can_control %}disabled{% endif %}></label>
-            {% for key in channel_keys %}<label><span>{{ appliance_configs[key].display_name }}</span><input type="number" data-limit="{{ key }}" value="{{ appliance_configs[key].kw_limit }}" min="0.01" step="0.1" {% if not can_control %}disabled{% endif %}></label>{% endfor %}
+            {% for key in channel_keys %}<label><span>{{ appliance_configs[key].display_name }} limit (W)</span><input type="number" data-limit="{{ key }}" value="{{ '%.3f'|format(appliance_configs[key].kw_limit * 1000) }}" min="1" step="1" {% if not can_control %}disabled{% endif %}></label>{% endfor %}
         </div><p>Changes are saved to the server and read by the Raspberry Pi.</p></article>
-        <article class="settings-card"><h4>Sensor diagnostics</h4><ul class="diag-list">{% for index in range(1, 4) %}<li><span>Modbus slave {{ index }}</span><strong data-sensor="{{ index }}">UNKNOWN</strong></li>{% endfor %}<li><span>Serial adapter</span><strong>/dev/ttyUSB0</strong></li></ul></article>
+        <article class="settings-card"><h4>Sensor diagnostics</h4><ul class="diag-list"><li><span>Slave 1 ACU adapter</span><strong>/dev/ttyUSB1</strong></li><li><span>Slave 2 Outlet adapter</span><strong>/dev/ttyUSB0</strong></li><li><span>Slave 3 Lighting adapter</span><strong>/dev/ttyUSB2</strong></li>{% for index in range(1, 4) %}<li><span>Modbus slave {{ index }} status</span><strong data-sensor="{{ index }}">UNKNOWN</strong></li>{% endfor %}</ul></article>
         <article class="settings-card"><h4>Operating mode</h4><p>Monitoring-only mode is configured on the Raspberry Pi with BASELINE_MODE. Relay requests are enforced by the device agent. An authorized RFID card must be scanned twice within 5 seconds to clear a trip latch; reset leaves all outputs OFF.</p></article></div>
     </section></main>
 
-    <main class="view-shell help-view" id="helpView"><section class="help-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Support</p><h3>Operating notes</h3></div></div><ol class="manual-list"><li>Confirm the sensor diagnostics report current readings.</li><li>Set instantaneous limits in kW for each channel.</li><li>Use the channel switches to request power. The Pi rejects ON requests on sensor or configuration failure.</li><li>Verify relay polarity and wiring on a disconnected test load before connecting appliances.</li></ol></section></main>
+    <main class="view-shell help-view" id="helpView"><section class="help-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Support</p><h3>Operating notes</h3></div></div><ol class="manual-list"><li>Confirm the sensor diagnostics report current readings and match the physical circuit.</li><li>Set each channel limit in watts (W); the system cap is also in watts.</li><li>Use the channel switches to request power. The Pi rejects ON requests on sensor or configuration failure.</li><li>Verify relay polarity and wiring on a disconnected test load before connecting appliances.</li></ol></section></main>
 </div>
 
 <div class="fab-stack" aria-label="Primary navigation" role="navigation">
-    <button class="fab active" data-view="live" type="button">APPLIANCES</button><button class="fab" data-view="analytics" type="button">LIVE POWER</button><button class="fab" data-view="settings" type="button">SETTINGS</button><button class="fab" data-view="help" type="button">HELP</button>
+    <button class="fab active" data-view="live" type="button">APPLIANCES</button><button class="fab" data-view="analytics" type="button">LIVE POWER</button><button class="fab" data-view="history" type="button">HISTORY</button><button class="fab" data-view="settings" type="button">SETTINGS</button><button class="fab" data-view="help" type="button">HELP</button>
 </div>
 
 <script>
 const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
-const views = {live: document.getElementById('liveView'), analytics: document.getElementById('analyticsView'), settings: document.getElementById('settingsView'), help: document.getElementById('helpView')};
-function setView(target) { Object.entries(views).forEach(([name, view]) => view.classList.toggle('active', name === target)); document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === target)); }
+const views = {live: document.getElementById('liveView'), analytics: document.getElementById('analyticsView'), history: document.getElementById('historyView'), settings: document.getElementById('settingsView'), help: document.getElementById('helpView')};
+function setView(target) { Object.entries(views).forEach(([name, view]) => view.classList.toggle('active', name === target)); document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === target)); if (target === 'history') loadHistory(); }
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { if (views[button.dataset.view]) setView(button.dataset.view); }));
+
+const historyDateInput = document.getElementById('historyDate');
+historyDateInput.addEventListener('change', loadHistory);
+
+async function loadHistory() {
+    const day = historyDateInput.value;
+    if (!day) return;
+    const status = document.getElementById('historyStatus');
+    status.textContent = 'Loading saved readings…';
+    try {
+        const response = await fetch(`/api/consumption?date=${encodeURIComponent(day)}`, {cache: 'no-store'});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Could not load consumption history');
+
+        const total = document.querySelector('[data-daily-total]');
+        total.textContent = payload.total_kwh === null ? 'Partial data' : `${Number(payload.total_kwh).toFixed(4)} kWh`;
+        for (let slave = 1; slave <= 3; slave++) {
+            const value = payload.consumption_kwh[String(slave)];
+            document.querySelector(`[data-daily-kwh="${slave}"]`).textContent = value === null ? '-- kWh' : `${Number(value).toFixed(4)} kWh`;
+        }
+        if (payload.partial) {
+            status.textContent = 'Some meter data is missing or starts after midnight; totals may be partial. Energy uses cumulative PZEM counter changes.';
+        } else {
+            status.textContent = `Showing ${payload.date} in ${payload.timezone}; energy is calculated from each meter’s cumulative counter.`;
+        }
+        drawLoadSeries(payload.series || []);
+    } catch (error) {
+        document.querySelector('[data-daily-total]').textContent = '-- kWh';
+        for (let slave = 1; slave <= 3; slave++) document.querySelector(`[data-daily-kwh="${slave}"]`).textContent = '-- kWh';
+        status.textContent = error.message;
+        drawLoadSeries([]);
+    }
+}
+
+function drawLoadSeries(series) {
+    const canvas = document.getElementById('dailyLoadChart');
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width, height = canvas.height;
+    const pad = {left: 76, right: 28, top: 58, bottom: 54};
+    const plotWidth = width - pad.left - pad.right;
+    const plotHeight = height - pad.top - pad.bottom;
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = 'rgba(6,10,16,0.72)';
+    ctx.fillRect(0, 0, width, height);
+
+    if (!series.length) {
+        ctx.fillStyle = '#aab7ca';
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('No saved power readings for this date', width / 2, height / 2);
+        return;
+    }
+
+    const colors = {1: '#63d8ff', 2: '#a78bfa', 3: '#61e6a5'};
+    const labels = {1: 'Slave 1', 2: 'Slave 2', 3: 'Slave 3'};
+    const powerValues = series.flatMap(point => [point.slave_1, point.slave_2, point.slave_3]
+        .filter(value => value !== null && Number.isFinite(Number(value))).map(Number));
+    const maxPower = Math.max(10, Math.ceil(Math.max(...powerValues) / 10) * 10);
+
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'right';
+    for (let line = 0; line <= 4; line++) {
+        const y = pad.top + plotHeight * line / 4;
+        const watts = maxPower * (1 - line / 4);
+        ctx.strokeStyle = 'rgba(223,234,255,0.12)';
+        ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(width - pad.right, y); ctx.stroke();
+        ctx.fillStyle = '#aab7ca';
+        ctx.fillText(`${watts.toFixed(0)} W`, pad.left - 10, y + 4);
+    }
+
+    for (let slave = 1; slave <= 3; slave++) {
+        ctx.strokeStyle = colors[slave];
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        let drawing = false;
+        series.forEach((point, index) => {
+            const value = point[`slave_${slave}`];
+            if (value === null || !Number.isFinite(Number(value))) { drawing = false; return; }
+            const x = pad.left + (series.length === 1 ? 0 : plotWidth * index / (series.length - 1));
+            const y = pad.top + plotHeight * (1 - Number(value) / maxPower);
+            if (!drawing) { ctx.moveTo(x, y); drawing = true; }
+            else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+    }
+
+    ctx.textAlign = 'left';
+    let legendX = pad.left;
+    for (let slave = 1; slave <= 3; slave++) {
+        ctx.fillStyle = colors[slave];
+        ctx.fillRect(legendX, 22, 14, 14);
+        ctx.fillStyle = '#dfeaff';
+        ctx.fillText(labels[slave], legendX + 21, 34);
+        legendX += 132;
+    }
+
+    ctx.textAlign = 'center';
+    [0, Math.floor((series.length - 1) / 2), series.length - 1].forEach(index => {
+        if (index < 0) return;
+        const x = pad.left + (series.length === 1 ? 0 : plotWidth * index / (series.length - 1));
+        ctx.fillStyle = '#aab7ca';
+        ctx.fillText(new Date(series[index].time).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}), x, height - 18);
+    });
+}
 
 async function updateTelemetry() {
     try {
@@ -140,7 +264,7 @@ document.querySelectorAll('[data-limit]').forEach(input => input.addEventListene
     const value = Number(input.value);
     if (!Number.isFinite(value) || value <= 0) { alert('Limit must be a positive number.'); return; }
     input.disabled = true;
-    try { await postJson('/api/appliance-config', {[key]: {kw_limit: value}}); }
+    try { await postJson('/api/appliance-config', {[key]: {kw_limit: value / 1000}}); }
     catch (error) { alert(error.message); }
     finally { input.disabled = false; }
 }));

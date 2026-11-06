@@ -5,6 +5,7 @@ from getpass import getpass
 import click
 from pathlib import Path
 from dotenv import load_dotenv
+from zoneinfo import ZoneInfo
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
@@ -14,6 +15,9 @@ from sqlalchemy import inspect, text, or_
 
 # Load this project's configuration regardless of the shell's current directory.
 load_dotenv(Path(__file__).resolve().with_name('.env'))
+
+APP_TIMEZONE_NAME = os.environ.get('APP_TIMEZONE', 'Asia/Manila')
+APP_TIMEZONE = ZoneInfo(APP_TIMEZONE_NAME)
 
 app = Flask(__name__)
 DEFAULT_PRESET_LIMIT = 500.0
@@ -575,6 +579,7 @@ def dashboard():
         display_name = (current_user.email or "Admin").split("@", 1)[0].title()
     session.setdefault('csrf_token', secrets.token_urlsafe(32))
     states = [entry.requested_state for entry in ordered_appliance_configs()]
+    local_today = datetime.datetime.now(APP_TIMEZONE).date()
     return render_template(
         "dashboard.html",
         logs=logs,
@@ -584,6 +589,8 @@ def dashboard():
         csrf_token=session['csrf_token'],
         can_control=bool(current_user.is_admin),
         user_display_name=display_name,
+        history_today=local_today.isoformat(),
+        history_min=(local_today - datetime.timedelta(days=29)).isoformat(),
     )
 
 @app.route("/api/control", methods=["GET", "POST"])
@@ -769,6 +776,118 @@ def api_latest():
             'date_recorded': row.date_recorded.isoformat() if row.date_recorded else None,
         })
     return jsonify({'readings': list(latest.values())})
+
+
+@app.route('/api/consumption', methods=['GET'])
+@login_required
+def api_consumption():
+    """Return daily cumulative-energy deltas and 5-minute average power samples."""
+    requested_date = request.args.get('date', '').strip()
+    try:
+        selected_day = datetime.date.fromisoformat(requested_date)
+    except ValueError:
+        return jsonify({'error': 'date must use YYYY-MM-DD format'}), 400
+
+    local_now = datetime.datetime.now(APP_TIMEZONE)
+    earliest_day = local_now.date() - datetime.timedelta(days=29)
+    if selected_day > local_now.date():
+        return jsonify({'error': 'future dates are unavailable'}), 400
+    if selected_day < earliest_day:
+        return jsonify({'error': 'history is available for the most recent 30 days'}), 400
+
+    local_start = datetime.datetime.combine(selected_day, datetime.time.min, tzinfo=APP_TIMEZONE)
+    local_end = datetime.datetime.combine(
+        selected_day + datetime.timedelta(days=1), datetime.time.min, tzinfo=APP_TIMEZONE
+    )
+    utc_start = local_start.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    utc_end = local_end.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+
+    day_rows = Log.query.filter(
+        Log.slave_id.in_([1, 2, 3]),
+        Log.date_recorded >= utc_start,
+        Log.date_recorded < utc_end,
+    ).order_by(Log.date_recorded.asc()).all()
+    rows_by_slave = {slave_id: [] for slave_id in (1, 2, 3)}
+    for row in day_rows:
+        rows_by_slave[row.slave_id].append(row)
+
+    consumption = {}
+    partial = False
+    for slave_id in (1, 2, 3):
+        rows_with_energy = []
+        for row in rows_by_slave[slave_id]:
+            try:
+                energy_wh = float(row.energy)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(energy_wh) and energy_wh >= 0:
+                rows_with_energy.append((row.date_recorded, energy_wh))
+
+        previous_row = Log.query.filter(
+            Log.slave_id == slave_id,
+            Log.date_recorded < utc_start,
+            Log.energy.isnot(None),
+        ).order_by(Log.date_recorded.desc()).first()
+        try:
+            previous_energy = float(previous_row.energy) if previous_row is not None else None
+        except (TypeError, ValueError):
+            previous_energy = None
+        if previous_energy is not None and (not math.isfinite(previous_energy) or previous_energy < 0):
+            previous_energy = None
+
+        if previous_energy is None and len(rows_with_energy) < 2:
+            consumption[slave_id] = None
+            partial = True
+            continue
+
+        values = [energy for _timestamp, energy in rows_with_energy]
+        baseline_known = previous_energy is not None
+        if baseline_known:
+            values.insert(0, previous_energy)
+        else:
+            partial = True
+
+        delta_wh = 0.0
+        for previous_value, current_value in zip(values, values[1:]):
+            # If a meter counter resets during the day, count from its new value.
+            delta_wh += current_value - previous_value if current_value >= previous_value else current_value
+        consumption[slave_id] = delta_wh / 1000.0
+
+    total_kwh = None
+    if all(consumption[slave_id] is not None for slave_id in (1, 2, 3)):
+        total_kwh = sum(consumption.values())
+
+    bucket_values = {}
+    sample_counts = {slave_id: 0 for slave_id in (1, 2, 3)}
+    for row in day_rows:
+        try:
+            power_w = float(row.power)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(power_w) or power_w < 0 or row.date_recorded is None:
+            continue
+        local_stamp = row.date_recorded.replace(tzinfo=datetime.timezone.utc).astimezone(APP_TIMEZONE)
+        bucket = local_stamp.replace(minute=(local_stamp.minute // 5) * 5, second=0, microsecond=0)
+        bucket_values.setdefault(bucket, {}).setdefault(row.slave_id, []).append(power_w)
+        sample_counts[row.slave_id] += 1
+
+    series = []
+    for bucket in sorted(bucket_values):
+        point = {'time': bucket.isoformat()}
+        for slave_id in (1, 2, 3):
+            samples = bucket_values[bucket].get(slave_id, [])
+            point[f'slave_{slave_id}'] = sum(samples) / len(samples) if samples else None
+        series.append(point)
+
+    return jsonify({
+        'date': selected_day.isoformat(),
+        'timezone': APP_TIMEZONE_NAME,
+        'consumption_kwh': {str(slave_id): consumption[slave_id] for slave_id in (1, 2, 3)},
+        'total_kwh': total_kwh,
+        'partial': partial,
+        'power_sample_count': {str(slave_id): sample_counts[slave_id] for slave_id in (1, 2, 3)},
+        'series': series,
+    })
 
 
 @app.route('/api/power-events', methods=['POST'])
