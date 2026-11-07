@@ -12,14 +12,14 @@ from sensors import read_all_pzem
 from controls.relay import control_appliance, cleanup as cleanup_relay, init as init_relays
 from auth.rfid import (
     AUTHORIZED_IDS,
-    RFID_RESET_TIMEOUT_SECONDS,
     init_reader as init_rfid_reader,
     is_authorized,
     read_rfid_id_no_block,
 )
 from utils.server import (
+    ack_energy_resets,
     get_appliance_configs, get_control_commands, report_trip,
-    reset_tripped_appliances, send_to_server, set_appliance_names,
+    notify_kiosk_event, reset_tripped_appliances, send_to_server, set_appliance_names,
 )
 
 shutdown_requested = False
@@ -33,6 +33,8 @@ root_dir = os.path.dirname(os.path.abspath(__file__))
 state_file = os.path.join(root_dir, "daily_usage_state.json")
 history_file = os.path.join(root_dir, "daily_usage_history.json")
 reported_cutoffs = set()
+KIOSK_INSPECTION_TIMEOUT_SECONDS = 300.0
+unacknowledged_energy_resets = set()
 
 
 def utc_now():
@@ -173,13 +175,52 @@ def append_history(event_type, message, value=0.0, limit=0.0, unit="W"):
     _atomic_json_write(history_file, events[-10000:])
 
 
+def append_rfid_reset_snapshot(result):
+    """Keep a local audit snapshot of per-meter daily use at RFID reset time."""
+    try:
+        with open(history_file, encoding="utf-8") as source:
+            events = json.load(source)
+        if not isinstance(events, list):
+            events = []
+    except (OSError, ValueError):
+        events = []
+    state = load_daily_state()
+    events.append({
+        "timestamp": utc_now().isoformat(),
+        "event_type": "rfid_reset",
+        "message": "Authorized second RFID scan completed the inspect/reset sequence.",
+        "daily_energy_kwh_before_reset": state.get("daily_energy_kwh", 0.0),
+        "daily_energy_wh_by_slave_before_reset": state.get("daily_energy_wh_by_slave", {}),
+        "resumed_appliances": result.get("resumed", []),
+        "manual_restart_required": result.get("manual_restart_required", []),
+        "faults_left_latched": result.get("faults_left_latched", []),
+    })
+    _atomic_json_write(history_file, events[-10000:])
+
+
+def reset_daily_energy_budgets(state, slave_ids):
+    """Restart selected branch budgets while keeping meter counters as new baselines."""
+    daily_by_slave = state.setdefault("daily_energy_wh_by_slave", {})
+    if not isinstance(daily_by_slave, dict):
+        daily_by_slave = {}
+        state["daily_energy_wh_by_slave"] = daily_by_slave
+    reset_ids = sorted({int(value) for value in slave_ids if str(value).isdigit() and int(value) in (1, 2, 3)})
+    for slave_id in reset_ids:
+        daily_by_slave[str(slave_id)] = 0.0
+        # Keep last_energy_wh unchanged so the next sample adds only new usage.
+    if reset_ids:
+        state["updated_at"] = utc_now().isoformat()
+        _atomic_json_write(state_file, state)
+    return reset_ids
+
+
 def signal_handler(_sig, _frame):
     global shutdown_requested
     shutdown_requested = True
 
 
 def rfid_reset_loop():
-    """Require two scans of an authorized card to clear trips, keeping outputs OFF."""
+    """Unlock inspection on first scan; reset eligible trips on a confirmed second scan."""
     if not AUTHORIZED_IDS:
         print("RFID reset disabled: add authorized card IDs to RFID_RESET_IDS in .env.")
         return
@@ -187,7 +228,7 @@ def rfid_reset_loop():
         print("RFID reset disabled: reader could not be initialized.")
         return
 
-    print("RFID trip reset ready; scan an authorized card twice within 5 seconds.")
+    print("RFID kiosk ready; first authorized scan unlocks inspection, second scan resets and re-locks.")
     last_card = None
     last_seen = 0.0
     pending_card = None
@@ -199,9 +240,10 @@ def rfid_reset_loop():
         if card_id is None:
             if now - last_seen >= 0.5:
                 last_card = None
-            if pending_card is not None and now - pending_at > RFID_RESET_TIMEOUT_SECONDS:
+            if pending_card is not None and now - pending_at > KIOSK_INSPECTION_TIMEOUT_SECONDS:
                 pending_card = None
-                print("RFID reset confirmation expired.")
+                notify_kiosk_event("lock")
+                print("RFID kiosk inspection timed out; screen re-locked without resetting trips.")
             time.sleep(0.15)
             continue
 
@@ -212,22 +254,36 @@ def rfid_reset_loop():
         last_card = card_id
 
         if not is_authorized(card_id):
-            pending_card = None
-            print("RFID reset denied: card is not authorized.")
+            notify_kiosk_event("denied")
+            print("RFID access denied: card is not authorized.")
             time.sleep(0.15)
             continue
 
-        if pending_card == card_id and now - pending_at <= RFID_RESET_TIMEOUT_SECONDS:
+        if pending_card == card_id and now - pending_at <= KIOSK_INSPECTION_TIMEOUT_SECONDS:
             try:
                 result = reset_tripped_appliances()
-                print(f"RFID reset accepted; all appliance requests remain OFF: {result}")
             except Exception as exc:
                 print(f"RFID reset upload failed; trips remain latched: {exc}")
-            pending_card = None
+            else:
+                pending_card = None
+                pending_at = 0.0
+                try:
+                    append_rfid_reset_snapshot(result)
+                except Exception as exc:
+                    print(f"Could not write local RFID audit snapshot: {exc}")
+                notify_kiosk_event("reset_complete")
+                print(f"RFID reset accepted; resumed branches: {result.get('resumed', [])}; manual restart required: {result.get('manual_restart_required', [])}; faults left latched: {result.get('faults_left_latched', [])}")
+        elif pending_card is not None and pending_card != card_id:
+            notify_kiosk_event("denied")
+            print("RFID confirmation rejected: scan the same authorized card that unlocked inspection.")
         else:
+            if not notify_kiosk_event("unlock"):
+                print("RFID access accepted locally, but kiosk server is unavailable; inspection remains locked.")
+                time.sleep(0.15)
+                continue
             pending_card = card_id
             pending_at = now
-            print(f"Authorized card scanned. Scan the same card again within {RFID_RESET_TIMEOUT_SECONDS:g}s to confirm reset.")
+            print("Authorized card accepted; kiosk unlocked for inspection. Scan the same card again within 5 minutes to reset and re-lock.")
         time.sleep(0.15)
 
 
@@ -376,6 +432,19 @@ def main():
                 print("Baseline mode: monitoring only; relay outputs held OFF.")
             else:
                 commands = get_control_commands()
+                server_reset_ids = commands.get("energy_reset_slaves", [])
+                if not isinstance(server_reset_ids, list):
+                    server_reset_ids = []
+                requested_reset_ids = {
+                    slave_id for slave_id in server_reset_ids
+                    if type(slave_id) is int and slave_id in (1, 2, 3)
+                }
+                new_reset_ids = requested_reset_ids - unacknowledged_energy_resets
+                if new_reset_ids:
+                    reset_daily_energy_budgets(state, new_reset_ids)
+                    unacknowledged_energy_resets.update(new_reset_ids)
+                if requested_reset_ids and ack_energy_resets(sorted(requested_reset_ids)):
+                    unacknowledged_energy_resets.difference_update(requested_reset_ids)
                 configs = get_appliance_configs()
                 limits = configured_limits(configs) if configs is not None else None
                 commands["daily_energy_wh_by_slave"] = state.get("daily_energy_wh_by_slave", {})

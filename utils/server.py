@@ -32,12 +32,42 @@ def send_to_server(data):
 
 
 def reset_tripped_appliances():
-    """Clear server-side trip latches using a locally authorized RFID scan."""
+    """Apply the confirmed RFID reset and return any local meter-budget resets."""
     response = requests.post(
         f"{API_BASE_URL}/api/rfid-reset", json={}, headers=_headers(), timeout=REQUEST_TIMEOUT
     )
     response.raise_for_status()
     return response.json()
+
+
+def notify_kiosk_event(action):
+    """Update the admin kiosk screen after a locally validated RFID scan."""
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/api/kiosk/event", json={"action": action},
+            headers=_headers(), timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return True
+    except (requests.RequestException, RuntimeError) as exc:
+        print(f"Kiosk status upload failed: {exc}")
+        return False
+
+
+def ack_energy_resets(slave_ids):
+    """Acknowledge local daily-budget resets after the Pi has persisted them."""
+    if not slave_ids:
+        return True
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/api/energy-reset-ack", json={"slave_ids": list(slave_ids)},
+            headers=_headers(), timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return True
+    except (requests.RequestException, RuntimeError) as exc:
+        print(f"Energy reset acknowledgement failed: {exc}")
+        return False
 
 
 def get_control_commands():
@@ -65,6 +95,7 @@ def get_control_commands():
         print(f"Control API unavailable: {exc}")
         return {"appliances": ["OFF"] * 3, "connected": False,
                 "tripped": [True] * 3,
+                "energy_reset_slaves": [],
                 "preset_limit": DEFAULT_PRESET_LIMIT,
                 "appliance_names": DEFAULT_APPLIANCE_NAMES}
 

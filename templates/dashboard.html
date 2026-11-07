@@ -13,7 +13,7 @@
         <div class="welcome-cluster"><span class="eyebrow">Power monitor</span><h1>Welcome, {{ user_display_name }}</h1></div>
         <div class="header-actions">
             <div class="status-pill is-baseline" id="modePill"><span class="pulse-dot"></span><div class="status-copy"><span class="status-label">DEVICE STATUS</span><strong id="modeText">Waiting for telemetry</strong></div></div>
-            <div class="utility-actions"><button class="header-action" data-view="settings" type="button">SETTINGS</button><button class="header-action" data-view="help" type="button">HELP</button><a class="logout-btn" href="{{ url_for('logout') }}">LOG OUT</a></div>
+            <div class="utility-actions">{% if can_control %}<a class="header-action" href="{{ url_for('kiosk') }}">KIOSK</a>{% endif %}<button class="header-action" data-view="settings" type="button">SETTINGS</button><button class="header-action" data-view="help" type="button">HELP</button><a class="logout-btn" href="{{ url_for('logout') }}">LOG OUT</a></div>
         </div>
     </header>
 

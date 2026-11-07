@@ -1,13 +1,14 @@
 import hmac
 import math
 import os, secrets, smtplib, datetime
+import threading
 from getpass import getpass
 import click
 from pathlib import Path
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -28,6 +29,8 @@ DEFAULT_APPLIANCE_CONFIGS = {
 }
 SENSOR_ID_BY_DEVICE = {"acu": 3, "outlet": 2, "lighting": 1}
 PZEM_PORT_BY_SLAVE_ID = {1: "/dev/ttyUSB1", 2: "/dev/ttyUSB0", 3: "/dev/ttyUSB2"}
+KIOSK_STATE_LOCK = threading.Lock()
+KIOSK_STATE = {"unlocked": False, "message": "Scan your authorized RFID card to inspect circuits.", "updated_at": None}
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or secrets.token_hex(32)
 app.config.update(
@@ -108,6 +111,12 @@ class ApplianceConfig(db.Model):
     kw_limit = db.Column(db.Float, default=10.0, nullable=False)
     energy_limit_wh = db.Column(db.Float, default=500.0, nullable=False)
     is_tripped = db.Column(db.Boolean, default=False)
+    trip_reason = db.Column(db.String(50))
+    trip_value = db.Column(db.Float)
+    trip_limit = db.Column(db.Float)
+    trip_unit = db.Column(db.String(8))
+    resume_after_trip = db.Column(db.Boolean, default=False, nullable=False)
+    energy_reset_pending = db.Column(db.Boolean, default=False, nullable=False)
     requested_state = db.Column(db.String(3), nullable=False, default='OFF')
     updated_at = db.Column(db.DateTime, default=utcnow_naive)
 
@@ -291,7 +300,7 @@ def inject_csrf_token():
 def protect_browser_posts():
     if request.method != 'POST':
         return None
-    device_write_paths = {'/api/data', '/api/device-trip', '/api/power-events', '/api/config', '/api/rfid-reset'}
+    device_write_paths = {'/api/data', '/api/device-trip', '/api/power-events', '/api/config', '/api/rfid-reset', '/api/kiosk/event', '/api/energy-reset-ack'}
     if request.path in device_write_paths:
         return None  # These routes validate the Pi bearer token themselves.
     if not csrf_valid():
@@ -322,6 +331,18 @@ def migrate_schema():
             db.session.execute(text("ALTER TABLE appliance_configs ADD COLUMN requested_state VARCHAR(3) NOT NULL DEFAULT 'OFF'"))
         if 'energy_limit_wh' not in columns:
             db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN energy_limit_wh FLOAT NOT NULL DEFAULT 500.0'))
+        if 'trip_reason' not in columns:
+            db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN trip_reason VARCHAR(50)'))
+        if 'trip_value' not in columns:
+            db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN trip_value FLOAT'))
+        if 'trip_limit' not in columns:
+            db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN trip_limit FLOAT'))
+        if 'trip_unit' not in columns:
+            db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN trip_unit VARCHAR(8)'))
+        if 'resume_after_trip' not in columns:
+            db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN resume_after_trip BOOLEAN NOT NULL DEFAULT 0'))
+        if 'energy_reset_pending' not in columns:
+            db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN energy_reset_pending BOOLEAN NOT NULL DEFAULT 0'))
     if 'power_events' in tables:
         columns = {column['name'] for column in inspector.get_columns('power_events')}
         if 'value_wh' not in columns:
@@ -614,6 +635,101 @@ def dashboard():
         pzem_port_by_slave_id=PZEM_PORT_BY_SLAVE_ID,
     )
 
+
+@app.route('/kiosk')
+@login_required
+def kiosk():
+    if not current_user.is_admin:
+        abort(403)
+    return render_template('kiosk.html')
+
+
+@app.route('/api/kiosk/state')
+@login_required
+def api_kiosk_state():
+    if not current_user.is_admin:
+        return jsonify({'error': 'administrator access required'}), 403
+    with KIOSK_STATE_LOCK:
+        kiosk_state = dict(KIOSK_STATE)
+    result = {'unlocked': bool(kiosk_state['unlocked']), 'message': kiosk_state['message'],
+              'updated_at': kiosk_state['updated_at']}
+    if not result['unlocked']:
+        return jsonify(result)
+
+    entries = ordered_appliance_configs()
+    rows = Log.query.filter(Log.slave_id.in_([1, 2, 3])).order_by(Log.date_recorded.desc()).limit(100).all()
+    latest = {}
+    for row in rows:
+        latest.setdefault(row.slave_id, row)
+    now = utcnow_naive()
+    branches = []
+    for entry in entries:
+        slave_id = SENSOR_ID_BY_DEVICE[entry.appliance_key]
+        row = latest.get(slave_id)
+        age_seconds = (now - row.date_recorded).total_seconds() if row and row.date_recorded else None
+        fresh = age_seconds is not None and 0 <= age_seconds <= 15
+        branches.append({
+            'name': entry.display_name,
+            'slave_id': slave_id,
+            'voltage': row.voltage if row and fresh else None,
+            'current': row.current if row and fresh else None,
+            'power': row.power if row and fresh else None,
+            'energy_kwh': row.energy / 1000.0 if row and fresh and row.energy is not None else None,
+            'fresh': fresh,
+            'tripped': bool(entry.is_tripped),
+            'trip_reason': entry.trip_reason,
+            'trip_value': entry.trip_value,
+            'trip_limit': entry.trip_limit,
+            'trip_unit': entry.trip_unit,
+            'energy_limit_wh': entry.energy_limit_wh,
+        })
+    result['branches'] = branches
+    result['server_time'] = datetime.datetime.now(APP_TIMEZONE).isoformat()
+    return jsonify(result)
+
+
+@app.route('/api/kiosk/event', methods=['POST'])
+def api_kiosk_event():
+    denied = require_device_token()
+    if denied:
+        return denied
+    payload = request.get_json(silent=True)
+    action = payload.get('action') if isinstance(payload, dict) else None
+    messages = {
+        'unlock': 'Authorized card accepted. Inspect the branch circuits, then scan the same card to reset and return to standby.',
+        'lock': 'Inspection ended. Scan your authorized RFID card to inspect circuits.',
+        'denied': 'Card not authorized. Try an authorized RFID card.',
+        'reset_complete': 'Reset sequence complete. Scan your authorized RFID card to inspect circuits.',
+    }
+    if action not in messages:
+        return jsonify({'error': 'unsupported kiosk action'}), 400
+    with KIOSK_STATE_LOCK:
+        if action == 'unlock':
+            KIOSK_STATE['unlocked'] = True
+        elif action in ('lock', 'reset_complete'):
+            KIOSK_STATE['unlocked'] = False
+        KIOSK_STATE['message'] = messages[action]
+        KIOSK_STATE['updated_at'] = utcnow_naive().isoformat()
+    return jsonify({'status': 'updated', 'unlocked': KIOSK_STATE['unlocked']})
+
+
+@app.route('/api/energy-reset-ack', methods=['POST'])
+def api_energy_reset_ack():
+    denied = require_device_token()
+    if denied:
+        return denied
+    payload = request.get_json(silent=True)
+    slave_ids = payload.get('slave_ids') if isinstance(payload, dict) else None
+    if not isinstance(slave_ids, list) or any(type(value) is not int or value not in (1, 2, 3) for value in slave_ids):
+        return jsonify({'error': 'slave_ids must contain only configured slave IDs'}), 400
+    entries_by_slave = {SENSOR_ID_BY_DEVICE[item.appliance_key]: item for item in ordered_appliance_configs()}
+    for slave_id in set(slave_ids):
+        entry = entries_by_slave[slave_id]
+        entry.energy_reset_pending = False
+        entry.updated_at = utcnow_naive()
+    db.session.commit()
+    return jsonify({'status': 'acknowledged', 'slave_ids': sorted(set(slave_ids))})
+
 @app.route("/api/control", methods=["GET", "POST"])
 def api_control():
     if request.method == "POST":
@@ -640,6 +756,8 @@ def api_control():
             }), 409
         for entry, state in zip(entries, normalized):
             entry.requested_state = state
+            if state == 'OFF' and entry.is_tripped:
+                entry.resume_after_trip = False
             entry.updated_at = utcnow_naive()
         db.session.commit()
         names = [entry.display_name for entry in entries]
@@ -661,34 +779,76 @@ def api_control():
         "appliances": states,
         "tripped": [entry.is_tripped for entry in entries],
         "preset_limit": get_preset_limit(),
-        "appliance_names": [entry.display_name for entry in entries]
+        "appliance_names": [entry.display_name for entry in entries],
+        "energy_reset_slaves": [
+            SENSOR_ID_BY_DEVICE[entry.appliance_key] for entry in entries if entry.energy_reset_pending
+        ],
     })
 
 
 @app.route('/api/rfid-reset', methods=['POST'])
 def api_rfid_reset():
-    """Clear trip latches after the Pi validates a confirmed RFID scan; keep outputs OFF."""
+    """Clear eligible power-limit trips and resume only branches active before cutoff."""
     denied = require_device_token()
     if denied:
         return denied
     entries = ordered_appliance_configs()
-    changed = any(entry.is_tripped or entry.requested_state == 'ON' for entry in entries)
+    resumed = []
+    reset_energy_slaves = []
+    faults_left_latched = []
+    manual_restart_required = []
     now = utcnow_naive()
     for entry in entries:
-        entry.requested_state = 'OFF'
+        if not entry.is_tripped:
+            continue
+        if entry.trip_reason == 'sensor_fault':
+            entry.requested_state = 'OFF'
+            entry.resume_after_trip = False
+            faults_left_latched.append(entry.display_name)
+            continue
+        if entry.trip_reason not in {'energy_limit', 'system_power_limit', 'power_limit'}:
+            entry.requested_state = 'OFF'
+            entry.resume_after_trip = False
+            faults_left_latched.append(entry.display_name)
+            continue
+
+        was_requested_on = bool(entry.resume_after_trip)
         entry.is_tripped = False
+        resume_automatically = entry.trip_reason == 'energy_limit' and was_requested_on
+        entry.requested_state = 'ON' if resume_automatically else 'OFF'
+        if resume_automatically:
+            resumed.append(entry.display_name)
+        elif was_requested_on:
+            manual_restart_required.append(entry.display_name)
+        if entry.trip_reason == 'energy_limit':
+            entry.energy_reset_pending = True
+            reset_energy_slaves.append(SENSOR_ID_BY_DEVICE[entry.appliance_key])
+        entry.trip_reason = None
+        entry.trip_value = None
+        entry.trip_limit = None
+        entry.trip_unit = None
+        entry.resume_after_trip = False
         entry.updated_at = now
-    if changed:
-        db.session.add(PowerEvent(
-            event_type='rfid_reset',
-            message='Authorized RFID reset cleared trip latches; all appliance requests remain OFF.',
-        ))
+    db.session.add(PowerEvent(
+        event_type='rfid_reset',
+        message=(f"Authorized RFID reset; resumed {len(resumed)} branch(es). "
+                 f"manual restart required: {', '.join(manual_restart_required) or 'none'}; "
+                 f"faults remain latched: {', '.join(faults_left_latched) or 'none'}; "
+                 "meter readings are retained in telemetry history."),
+    ))
     db.session.commit()
+    with KIOSK_STATE_LOCK:
+        KIOSK_STATE['unlocked'] = False
+        KIOSK_STATE['message'] = 'Reset sequence complete. Scan your authorized RFID card to inspect circuits.'
+        KIOSK_STATE['updated_at'] = now.isoformat()
     return jsonify({
         'status': 'reset',
-        'changed': changed,
-        'appliances': ['OFF'] * len(entries),
-        'tripped': [False] * len(entries),
+        'resumed': resumed,
+        'manual_restart_required': manual_restart_required,
+        'faults_left_latched': faults_left_latched,
+        'appliances': [entry.requested_state for entry in entries],
+        'tripped': [bool(entry.is_tripped) for entry in entries],
+        'energy_reset_slaves': sorted(reset_energy_slaves),
     }), 200
 
 
@@ -717,10 +877,16 @@ def api_device_trip():
     if index not in range(3) or not math.isfinite(value) or not math.isfinite(limit):
         return jsonify({'error': 'invalid trip data'}), 400
     entry = entries[index]
+    was_requested_on = entry.requested_state == 'ON' or bool(entry.resume_after_trip)
     entry.requested_state = 'OFF'
     entry.is_tripped = True
     entry.updated_at = utcnow_naive()
     reason = str(payload.get('reason', 'power_limit'))[:50]
+    entry.trip_reason = reason
+    entry.trip_value = value
+    entry.trip_limit = limit
+    entry.trip_unit = unit
+    entry.resume_after_trip = was_requested_on and reason != 'sensor_fault'
     message = f'{entry.display_name} cutoff: {reason}.'
     event = PowerEvent(event_type=reason, message=message)
     if unit == 'Wh':

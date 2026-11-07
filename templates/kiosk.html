@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#071018">
+    <title>Energy Access Control</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='kiosk.css') }}">
+</head>
+<body>
+    <main class="kiosk-shell">
+        <header class="kiosk-header">
+            <a class="brand" href="{{ url_for('dashboard') }}" aria-label="Return to web dashboard"><span class="brand-mark">E</span><span>ENERGY ACCESS<span class="brand-subtitle">BRANCH CIRCUIT CONTROL</span></span></a>
+            <div class="clock-wrap"><span id="systemDate">Loading date</span><strong id="systemClock">--:--</strong></div>
+        </header>
+
+        <section class="standby-screen" id="standbyScreen" aria-labelledby="standbyTitle">
+            <div class="standby-main">
+                <div class="lock-orbit" aria-hidden="true"><span class="lock-icon"></span><i></i><i></i><i></i></div>
+                <p class="eyebrow">SYSTEM STANDBY · CIRCUITS PROTECTED</p>
+                <h1 id="standbyTitle">System locked</h1>
+                <p class="standby-copy">Present an authorized RFID card to inspect the branch circuits.</p>
+                <div class="scan-prompt"><span class="scan-wave" aria-hidden="true"></span><strong>SCAN YOUR RFID CARD</strong></div>
+            </div>
+            <aside class="standby-aside">
+                <article class="idle-panel quote-panel"><span class="panel-kicker">TODAY'S THOUGHT</span><blockquote id="dailyQuote"></blockquote><span id="quoteAuthor" class="quote-author"></span></article>
+                <article class="idle-panel tip-panel"><span class="panel-kicker">ENERGY EFFICIENCY TIP</span><p id="dailyTip"></p></article>
+            </aside>
+        </section>
+
+        <section class="inspect-screen" id="inspectScreen" aria-labelledby="inspectTitle" hidden>
+            <div class="inspect-heading"><div><p class="eyebrow">AUTHORIZED INSPECTION</p><h1 id="inspectTitle">Circuit overview</h1><p id="inspectMessage" class="inspect-message">Review the current readings before confirming reset.</p></div><div class="confirm-badge"><span></span> SECOND SCAN TO RESET</div></div>
+            <div class="trip-banner" id="tripBanner" hidden><span class="trip-symbol">!</span><div><strong id="tripTitle">Circuit cutoff detected</strong><p id="tripDescription"></p></div></div>
+            <div class="branch-grid" id="branchGrid" aria-live="polite"></div>
+            <footer class="inspect-footer"><span>Scan the same authorized card again to log this inspection, reset eligible trips, and return to standby.</span><span class="footer-lock">LOCKS AFTER CONFIRMATION</span></footer>
+        </section>
+
+        <div class="kiosk-toast" id="kioskToast" role="status" aria-live="polite"></div>
+        <footer class="system-footer"><span><i class="online-dot" id="onlineDot"></i><span id="connectionStatus">Connecting to device monitor…</span></span><span>Touchscreen kiosk · RFID access required</span></footer>
+    </main>
+<script>
+const quotes = [
+    ['A clear mind makes room for a wiser choice.', 'Daily reflection'],
+    ['What we pay attention to shapes what we become.', 'Daily reflection'],
+    ['A thoughtful pause can change the next step.', 'Daily reflection'],
+    ['Use what you need; care for what you share.', 'Daily reflection'],
+    ['Good habits turn small choices into lasting change.', 'Daily reflection'],
+    ['The way we care for things reflects what we value.', 'Daily reflection'],
+    ['Wisdom begins when we notice the effect of our actions.', 'Daily reflection'],
+    ['A better future is built through deliberate choices today.', 'Daily reflection'],
+];
+const tips = [
+    'Switch off lights in empty rooms. Small daily choices add up across the whole home.',
+    'Unplug chargers and idle electronics when they are not in use.',
+    'Use daylight when possible and keep lamps focused on the task at hand.',
+    'Clean fan blades and vents regularly so equipment can move air efficiently.',
+    'Choose LED lighting and match the bulb brightness to the room and task.',
+    'Avoid leaving appliances on standby when they can be safely switched off.',
+    'Run full loads in washing machines and use cooler settings when suitable.',
+];
+const localDay = new Intl.DateTimeFormat('en-CA', {timeZone: 'Asia/Manila'}).format(new Date());
+const dayIndex = Math.floor(Date.parse(`${localDay}T00:00:00Z`) / 86400000);
+document.getElementById('dailyQuote').textContent = `“${quotes[dayIndex % quotes.length][0]}”`;
+document.getElementById('quoteAuthor').textContent = `— ${quotes[dayIndex % quotes.length][1]}`;
+document.getElementById('dailyTip').textContent = tips[dayIndex % tips.length];
+
+const standby = document.getElementById('standbyScreen');
+const inspect = document.getElementById('inspectScreen');
+const branchGrid = document.getElementById('branchGrid');
+const toast = document.getElementById('kioskToast');
+let previousMessage = '';
+
+function updateClock() {
+    const now = new Date();
+    document.getElementById('systemDate').textContent = new Intl.DateTimeFormat('en-PH', {weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'Asia/Manila'}).format(now);
+    document.getElementById('systemClock').textContent = new Intl.DateTimeFormat('en-PH', {hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila'}).format(now);
+}
+updateClock();
+window.setInterval(updateClock, 1000);
+
+function addMetric(parent, label, value) {
+    const item = document.createElement('div');
+    item.className = 'reading-metric';
+    const caption = document.createElement('span');
+    caption.textContent = label;
+    const reading = document.createElement('strong');
+    reading.textContent = value;
+    item.append(caption, reading);
+    parent.append(item);
+}
+
+function renderBranches(branches) {
+    branchGrid.replaceChildren();
+    const tripped = branches.filter(branch => branch.tripped);
+    document.getElementById('tripBanner').hidden = tripped.length === 0;
+    if (tripped.length) {
+        document.getElementById('tripTitle').textContent = `${tripped.length} circuit${tripped.length === 1 ? '' : 's'} tripped`;
+        document.getElementById('tripDescription').textContent = tripped.map(branch => {
+            const reason = branch.trip_reason === 'energy_limit' ? 'daily energy limit reached' :
+                branch.trip_reason === 'sensor_fault' ? 'sensor fault; circuit remains locked off' : 'power limit cutoff';
+            const limit = branch.trip_limit == null ? '' : ` · limit ${Number(branch.trip_limit).toFixed(1)} ${branch.trip_unit || 'Wh'}`;
+            return `${branch.name}: ${reason}${limit}`;
+        }).join('  |  ');
+    }
+    branches.forEach(branch => {
+        const card = document.createElement('article');
+        card.className = `branch-card${branch.tripped ? ' is-tripped' : ''}`;
+        const top = document.createElement('div');
+        top.className = 'branch-card-top';
+        const title = document.createElement('div');
+        const channel = document.createElement('span');
+        channel.className = 'channel-caption';
+        channel.textContent = `BRANCH · MODBUS SLAVE ${branch.slave_id}`;
+        const name = document.createElement('h2');
+        name.textContent = branch.name;
+        title.append(channel, name);
+        const status = document.createElement('span');
+        status.className = `branch-status${branch.tripped ? ' is-tripped' : ''}`;
+        status.textContent = branch.tripped ? 'TRIPPED' : branch.fresh ? 'NORMAL' : 'STALE';
+        top.append(title, status);
+        const metrics = document.createElement('div');
+        metrics.className = 'reading-grid';
+        addMetric(metrics, 'POWER', branch.power == null ? '— W' : `${Number(branch.power).toFixed(1)} W`);
+        addMetric(metrics, 'VOLTAGE', branch.voltage == null ? '— V' : `${Number(branch.voltage).toFixed(1)} V`);
+        addMetric(metrics, 'CURRENT', branch.current == null ? '— A' : `${Number(branch.current).toFixed(3)} A`);
+        addMetric(metrics, 'METER ENERGY', branch.energy_kwh == null ? '— kWh' : `${Number(branch.energy_kwh).toFixed(3)} kWh`);
+        const note = document.createElement('p');
+        note.className = 'branch-note';
+        note.textContent = branch.tripped
+            ? (branch.trip_reason === 'sensor_fault' ? 'Sensor fault must be fixed before this circuit can reset.' :
+                branch.trip_reason === 'energy_limit' ? 'Second authorized scan resets this daily budget and restores the prior request.' :
+                'Second scan clears the latch; reduce system load before manually restarting.')
+            : branch.fresh ? 'Live meter reading' : 'Waiting for a fresh meter reading';
+        card.append(top, metrics, note);
+        branchGrid.append(card);
+    });
+    if (!branches.length) {
+        const empty = document.createElement('p');
+        empty.className = 'empty-state';
+        empty.textContent = 'No branch configurations are available.';
+        branchGrid.append(empty);
+    }
+}
+
+function showToast(message) {
+    if (!message || message === previousMessage || message.includes('Scan your authorized')) return;
+    previousMessage = message;
+    toast.textContent = message;
+    toast.classList.add('is-visible');
+    window.setTimeout(() => toast.classList.remove('is-visible'), 3500);
+}
+
+async function refreshKiosk() {
+    try {
+        const response = await fetch('/api/kiosk/state', {cache: 'no-store'});
+        if (!response.ok) throw new Error('Kiosk status unavailable');
+        const state = await response.json();
+        document.getElementById('connectionStatus').textContent = 'Device monitor connected';
+        document.getElementById('onlineDot').classList.add('is-online');
+        standby.hidden = Boolean(state.unlocked);
+        inspect.hidden = !state.unlocked;
+        if (state.unlocked) {
+            document.getElementById('inspectMessage').textContent = state.message;
+            renderBranches(state.branches || []);
+        } else {
+            showToast(state.message);
+        }
+    } catch (_error) {
+        document.getElementById('connectionStatus').textContent = 'Device monitor unavailable · screen remains locked';
+        document.getElementById('onlineDot').classList.remove('is-online');
+        standby.hidden = false;
+        inspect.hidden = true;
+    }
+}
+refreshKiosk();
+window.setInterval(refreshKiosk, 1200);
+</script>
+</body>
+</html>
