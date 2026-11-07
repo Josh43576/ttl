@@ -116,3 +116,15 @@ body{margin:0;min-width:320px;height:100dvh;overflow:hidden;background:radial-gr
   .inspect-footer{display:flex;justify-content:center;margin-top:4px;font-size:8px}.inspect-footer span:first-child{display:none}.footer-lock{font-size:8px}
   .system-footer{display:none}.kiosk-toast{bottom:8px;padding:7px 9px;font-size:9px}
 }
+
+/* Keep the locked kiosk prompt centered on small or short displays, like the 404 screen. */
+@media (max-width:760px), (max-height:520px){
+  .standby-screen{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto;justify-items:center;align-content:center;gap:0;padding:8px 0}
+  .standby-main{width:min(100%,680px);padding:8px 10px;text-align:center}
+  .standby-main .lock-orbit{width:clamp(88px,20vw,104px);height:clamp(88px,20vw,104px);margin:0 auto 8px}
+  .standby-main .lock-icon{transform:scale(1.45)}
+  .standby-main h1{font-size:clamp(29px,6vw,34px);margin:5px 0}
+  .standby-main .standby-copy{font-size:clamp(12px,2.8vw,15px);line-height:1.35}
+  .standby-main .scan-prompt{margin:12px auto 0;padding:12px 17px;font-size:12px;letter-spacing:.06em}
+  .standby-main .scan-wave{width:10px;height:10px}
+}
