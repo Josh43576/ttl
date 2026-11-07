@@ -70,7 +70,7 @@ def ack_energy_resets(slave_ids):
         return False
 
 
-def get_control_commands():
+def get_control_commands(silent=False):
     """Read persisted relay requests. Return connected=False on any API failure."""
     try:
         response = requests.get(
@@ -92,7 +92,8 @@ def get_control_commands():
         payload.setdefault("appliance_names", DEFAULT_APPLIANCE_NAMES)
         return payload
     except (requests.RequestException, ValueError, RuntimeError) as exc:
-        print(f"Control API unavailable: {exc}")
+        if not silent:
+            print(f"Control API unavailable: {exc}")
         return {"appliances": ["OFF"] * 3, "connected": False,
                 "tripped": [True] * 3,
                 "energy_reset_slaves": [],

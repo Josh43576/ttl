@@ -98,8 +98,10 @@ function renderBranches(branches) {
         document.getElementById('tripDescription').textContent = tripped.map(branch => {
             const reason = branch.trip_reason === 'energy_limit' ? 'daily energy limit reached' :
                 branch.trip_reason === 'sensor_fault' ? 'sensor fault; circuit remains locked off' : 'power limit cutoff';
-            const limit = branch.trip_limit == null ? '' : ` · limit ${Number(branch.trip_limit).toFixed(1)} ${branch.trip_unit || 'Wh'}`;
-            return `${branch.name}: ${reason}${limit}`;
+            const hasLimitData = branch.trip_reason !== 'sensor_fault';
+            const value = !hasLimitData || branch.trip_value == null ? '' : ` · measured ${Number(branch.trip_value).toFixed(1)} ${branch.trip_unit || 'Wh'}`;
+            const limit = !hasLimitData || branch.trip_limit == null ? '' : ` / limit ${Number(branch.trip_limit).toFixed(1)} ${branch.trip_unit || 'Wh'}`;
+            return `${branch.name}: ${reason}${value}${limit}`;
         }).join('  |  ');
     }
     branches.forEach(branch => {
@@ -123,7 +125,12 @@ function renderBranches(branches) {
         addMetric(metrics, 'POWER', branch.power == null ? '— W' : `${Number(branch.power).toFixed(1)} W`);
         addMetric(metrics, 'VOLTAGE', branch.voltage == null ? '— V' : `${Number(branch.voltage).toFixed(1)} V`);
         addMetric(metrics, 'CURRENT', branch.current == null ? '— A' : `${Number(branch.current).toFixed(3)} A`);
-        addMetric(metrics, 'METER ENERGY', branch.energy_kwh == null ? '— kWh' : `${Number(branch.energy_kwh).toFixed(3)} kWh`);
+        addMetric(metrics, 'TODAY', branch.daily_energy_wh == null ? '— Wh' : `${Number(branch.daily_energy_wh).toFixed(1)} Wh`);
+        const budget = document.createElement('p');
+        budget.className = 'budget-line';
+        budget.textContent = branch.daily_energy_wh == null
+            ? 'Daily budget: waiting for device data'
+            : `Daily budget: ${Number(branch.daily_energy_wh).toFixed(1)} / ${Number(branch.energy_limit_wh).toFixed(1)} Wh`;
         const note = document.createElement('p');
         note.className = 'branch-note';
         note.textContent = branch.tripped
@@ -131,7 +138,7 @@ function renderBranches(branches) {
                 branch.trip_reason === 'energy_limit' ? 'Second authorized scan resets this daily budget and restores the prior request.' :
                 'Second scan clears the latch; reduce system load before manually restarting.')
             : branch.fresh ? 'Live meter reading' : 'Waiting for a fresh meter reading';
-        card.append(top, metrics, note);
+        card.append(top, metrics, budget, note);
         branchGrid.append(card);
     });
     if (!branches.length) {

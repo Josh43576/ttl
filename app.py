@@ -97,6 +97,7 @@ class Log(db.Model):
     power = db.Column(db.Float)
     slave_id = db.Column(db.Integer)
     energy = db.Column(db.Float)
+    daily_energy_wh = db.Column(db.Float)
     date_recorded = db.Column(db.DateTime, default=utcnow_naive)
 
     user = db.relationship("User", backref=db.backref("logs", lazy=True))
@@ -110,6 +111,7 @@ class ApplianceConfig(db.Model):
     display_name = db.Column(db.String(100), nullable=False)
     kw_limit = db.Column(db.Float, default=10.0, nullable=False)
     energy_limit_wh = db.Column(db.Float, default=500.0, nullable=False)
+    daily_energy_wh = db.Column(db.Float, default=0.0, nullable=False)
     is_tripped = db.Column(db.Boolean, default=False)
     trip_reason = db.Column(db.String(50))
     trip_value = db.Column(db.Float)
@@ -199,6 +201,7 @@ def ensure_appliance_configs():
                 display_name=config["display_name"],
                 kw_limit=float(config["kw_limit"]),
                 energy_limit_wh=float(config["energy_limit_wh"]),
+                daily_energy_wh=0.0,
                 is_tripped=False,
                 requested_state='OFF',
             ))
@@ -212,6 +215,9 @@ def ensure_appliance_configs():
                 changed = True
             if existing.energy_limit_wh is None:
                 existing.energy_limit_wh = float(config["energy_limit_wh"])
+                changed = True
+            if existing.daily_energy_wh is None:
+                existing.daily_energy_wh = 0.0
                 changed = True
             if not existing.requested_state:
                 existing.requested_state = 'OFF'
@@ -320,6 +326,8 @@ def migrate_schema():
             db.session.execute(text('ALTER TABLE logs ADD COLUMN slave_id INTEGER'))
         if 'energy' not in columns:
             db.session.execute(text('ALTER TABLE logs ADD COLUMN energy FLOAT'))
+        if 'daily_energy_wh' not in columns:
+            db.session.execute(text('ALTER TABLE logs ADD COLUMN daily_energy_wh FLOAT'))
         db.session.execute(text('CREATE INDEX IF NOT EXISTS ix_logs_date_recorded ON logs(date_recorded)'))
     if 'users' in tables:
         columns = {column['name'] for column in inspector.get_columns('users')}
@@ -331,6 +339,8 @@ def migrate_schema():
             db.session.execute(text("ALTER TABLE appliance_configs ADD COLUMN requested_state VARCHAR(3) NOT NULL DEFAULT 'OFF'"))
         if 'energy_limit_wh' not in columns:
             db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN energy_limit_wh FLOAT NOT NULL DEFAULT 500.0'))
+        if 'daily_energy_wh' not in columns:
+            db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN daily_energy_wh FLOAT NOT NULL DEFAULT 0.0'))
         if 'trip_reason' not in columns:
             db.session.execute(text('ALTER TABLE appliance_configs ADD COLUMN trip_reason VARCHAR(50)'))
         if 'trip_value' not in columns:
@@ -675,6 +685,7 @@ def api_kiosk_state():
             'current': row.current if row and fresh else None,
             'power': row.power if row and fresh else None,
             'energy_kwh': row.energy / 1000.0 if row and fresh and row.energy is not None else None,
+            'daily_energy_wh': (0.0 if entry.energy_reset_pending else entry.daily_energy_wh) if row and fresh else None,
             'fresh': fresh,
             'tripped': bool(entry.is_tripped),
             'trip_reason': entry.trip_reason,
@@ -806,6 +817,18 @@ def api_rfid_reset():
             entry.resume_after_trip = False
             faults_left_latched.append(entry.display_name)
             continue
+        if entry.trip_reason is None:
+            # Upgrade path for trip latches written before trip reasons were stored.
+            # Clear the legacy latch and budget, but require a manual ON request.
+            entry.is_tripped = False
+            entry.requested_state = 'OFF'
+            entry.energy_reset_pending = True
+            entry.daily_energy_wh = 0.0
+            entry.resume_after_trip = False
+            reset_energy_slaves.append(SENSOR_ID_BY_DEVICE[entry.appliance_key])
+            manual_restart_required.append(entry.display_name)
+            entry.updated_at = now
+            continue
         if entry.trip_reason not in {'energy_limit', 'system_power_limit', 'power_limit'}:
             entry.requested_state = 'OFF'
             entry.resume_after_trip = False
@@ -822,6 +845,7 @@ def api_rfid_reset():
             manual_restart_required.append(entry.display_name)
         if entry.trip_reason == 'energy_limit':
             entry.energy_reset_pending = True
+            entry.daily_energy_wh = 0.0
             reset_energy_slaves.append(SENSOR_ID_BY_DEVICE[entry.appliance_key])
         entry.trip_reason = None
         entry.trip_value = None
@@ -907,6 +931,9 @@ def api_data():
         return denied
     payload = request.get_json(silent=True)
     readings = payload.get("readings") if isinstance(payload, dict) else payload
+    daily_energy_by_slave = payload.get("daily_energy_wh_by_slave", {}) if isinstance(payload, dict) else {}
+    if not isinstance(daily_energy_by_slave, dict):
+        daily_energy_by_slave = {}
     if not isinstance(readings, list) or len(readings) > 3:
         return jsonify({"error": "request body must be a list of sensor readings"}), 400
 
@@ -935,6 +962,12 @@ def api_data():
         voltage = optional_reading('voltage')
         current = optional_reading('current')
         energy = optional_reading('energy')
+        try:
+            daily_energy_wh = float(daily_energy_by_slave.get(str(slave_id)))
+        except (TypeError, ValueError):
+            daily_energy_wh = None
+        if daily_energy_wh is not None and (not math.isfinite(daily_energy_wh) or daily_energy_wh < 0):
+            daily_energy_wh = None
         seen_slaves.add(slave_id)
 
         accepted.append(Log(
@@ -943,6 +976,7 @@ def api_data():
             power=power,
             slave_id=slave_id,
             energy=energy,
+            daily_energy_wh=daily_energy_wh,
         ))
 
     if not accepted:
@@ -951,6 +985,14 @@ def api_data():
     try:
         retention_cutoff = utcnow_naive() - datetime.timedelta(days=30)
         Log.query.filter(Log.date_recorded < retention_cutoff).delete(synchronize_session=False)
+        entries_by_slave = {
+            SENSOR_ID_BY_DEVICE[entry.appliance_key]: entry for entry in ordered_appliance_configs()
+        }
+        for row in accepted:
+            if row.daily_energy_wh is not None:
+                entry = entries_by_slave.get(row.slave_id)
+                if entry is not None and not entry.energy_reset_pending:
+                    entry.daily_energy_wh = row.daily_energy_wh
         db.session.add_all(accepted)
         db.session.commit()
     except Exception:

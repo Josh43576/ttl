@@ -422,32 +422,36 @@ def main():
             state = update_daily_energy(readings, state)
             print(f"Today's energy: {state['daily_energy_kwh']:.3f} kWh")
             try:
-                send_to_server(readings)
+                send_to_server({
+                    "readings": readings,
+                    "daily_energy_wh_by_slave": state.get("daily_energy_wh_by_slave", {}),
+                })
             except Exception as exc:
                 print(f"Telemetry upload failed: {exc}")
+
+            commands = get_control_commands(silent=BASELINE_MODE)
+            server_reset_ids = commands.get("energy_reset_slaves", [])
+            if not isinstance(server_reset_ids, list):
+                server_reset_ids = []
+            requested_reset_ids = {
+                slave_id for slave_id in server_reset_ids
+                if type(slave_id) is int and slave_id in (1, 2, 3)
+            }
+            new_reset_ids = requested_reset_ids - unacknowledged_energy_resets
+            if new_reset_ids:
+                reset_daily_energy_budgets(state, new_reset_ids)
+                unacknowledged_energy_resets.update(new_reset_ids)
+            if requested_reset_ids and ack_energy_resets(sorted(requested_reset_ids)):
+                unacknowledged_energy_resets.difference_update(requested_reset_ids)
+            commands["daily_energy_wh_by_slave"] = state.get("daily_energy_wh_by_slave", {})
 
             if BASELINE_MODE:
                 for index in range(3):
                     control_appliance(index, False)
                 print("Baseline mode: monitoring only; relay outputs held OFF.")
             else:
-                commands = get_control_commands()
-                server_reset_ids = commands.get("energy_reset_slaves", [])
-                if not isinstance(server_reset_ids, list):
-                    server_reset_ids = []
-                requested_reset_ids = {
-                    slave_id for slave_id in server_reset_ids
-                    if type(slave_id) is int and slave_id in (1, 2, 3)
-                }
-                new_reset_ids = requested_reset_ids - unacknowledged_energy_resets
-                if new_reset_ids:
-                    reset_daily_energy_budgets(state, new_reset_ids)
-                    unacknowledged_energy_resets.update(new_reset_ids)
-                if requested_reset_ids and ack_energy_resets(sorted(requested_reset_ids)):
-                    unacknowledged_energy_resets.difference_update(requested_reset_ids)
                 configs = get_appliance_configs()
                 limits = configured_limits(configs) if configs is not None else None
-                commands["daily_energy_wh_by_slave"] = state.get("daily_energy_wh_by_slave", {})
                 apply_commands(readings, commands, limits)
             time.sleep(5)
     except Exception as exc:
