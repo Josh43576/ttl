@@ -22,16 +22,16 @@
                 <p class="standby-copy">Present an authorized RFID card to inspect the branch circuits.</p>
                 <div class="scan-prompt"><span class="scan-wave" aria-hidden="true"></span><strong>SCAN YOUR RFID CARD</strong></div>
             </div>
-            <aside class="standby-aside idle-panel">
-                <article class="quote-panel"><span class="panel-kicker">TODAY'S THOUGHT</span><blockquote id="dailyQuote"></blockquote><span id="quoteAuthor" class="quote-author"></span></article>
-                <article class="tip-panel"><span class="panel-kicker">ENERGY EFFICIENCY TIP</span><p id="dailyTip"></p></article>
-            </aside>
         </section>
 
         <section class="inspect-screen" id="inspectScreen" aria-labelledby="inspectTitle" hidden>
             <div class="inspect-heading"><div><p class="eyebrow">AUTHORIZED INSPECTION</p><h1 id="inspectTitle">Circuit overview</h1><p id="inspectMessage" class="inspect-message">Review the current readings before confirming reset.</p></div><div class="confirm-badge"><span></span> SECOND SCAN TO RESET</div></div>
             <div class="trip-banner" id="tripBanner" hidden><span class="trip-symbol">!</span><div><strong id="tripTitle">Circuit cutoff detected</strong><p id="tripDescription"></p></div></div>
             <div class="branch-grid" id="branchGrid" aria-live="polite"></div>
+            <aside class="inspect-aside idle-panel" aria-label="Daily energy guidance">
+                <article class="quote-panel"><span class="panel-kicker">TODAY'S THOUGHT</span><blockquote id="dailyQuote"></blockquote><span id="quoteAuthor" class="quote-author"></span></article>
+                <article class="tip-panel"><span class="panel-kicker">ENERGY EFFICIENCY TIP</span><p id="dailyTip"></p></article>
+            </aside>
             <footer class="inspect-footer"><span>Scan the same authorized card again to log this inspection, reset eligible trips, and return to standby.</span><span class="footer-lock">LOCKS AFTER CONFIRMATION</span></footer>
         </section>
 
