@@ -22,11 +22,11 @@ APP_TIMEZONE = ZoneInfo(APP_TIMEZONE_NAME)
 app = Flask(__name__)
 DEFAULT_PRESET_LIMIT = 500.0
 DEFAULT_APPLIANCE_CONFIGS = {
-    "acu": {"display_name": "ACU Unit", "kw_limit": 10.0, "energy_limit_wh": 500.0},
-    "outlet": {"display_name": "3-Gang Outlet", "kw_limit": 5.0, "energy_limit_wh": 500.0},
-    "lighting": {"display_name": "Lighting Circuit", "kw_limit": 2.0, "energy_limit_wh": 500.0},
+    "acu": {"display_name": "Lighting outlet", "kw_limit": 10.0, "energy_limit_wh": 500.0},
+    "outlet": {"display_name": "Convenience outlet", "kw_limit": 5.0, "energy_limit_wh": 500.0},
+    "lighting": {"display_name": "Special purpose outlet", "kw_limit": 2.0, "energy_limit_wh": 500.0},
 }
-SENSOR_ID_BY_DEVICE = {"acu": 2, "outlet": 3, "lighting": 1}
+SENSOR_ID_BY_DEVICE = {"acu": 1, "outlet": 2, "lighting": 3}
 PZEM_PORT_BY_SLAVE_ID = {1: "/dev/ttyUSB1", 2: "/dev/ttyUSB0", 3: "/dev/ttyUSB2"}
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or secrets.token_hex(32)

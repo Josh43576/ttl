@@ -37,8 +37,32 @@
                     <p class="trip-status" data-trip-status="{{ index }}" hidden>Power cutoff is latched. Check the load, scan an authorized RFID card twice within 5 seconds to clear the latch; outputs stay OFF until requested again.</p>
                 </article>
             {% endfor %}
+            {% if can_control %}
+            <button class="add-branch-card" id="addBranchButton" type="button" aria-haspopup="dialog" aria-controls="addBranchDialog">
+                <span class="add-branch-icon" aria-hidden="true">+</span>
+                <strong>Add branch circuit</strong>
+                <small>Create a removable demo appliance</small>
+            </button>
+            {% endif %}
         </section>
     </main>
+
+    {% if can_control %}
+    <dialog class="branch-dialog" id="addBranchDialog" aria-labelledby="addBranchTitle">
+        <form id="addBranchForm" class="branch-dialog-form">
+            <button class="branch-dialog-close" type="button" data-close-branch-dialog aria-label="Close">&times;</button>
+            <p class="eyebrow">Dashboard preview</p>
+            <h2 id="addBranchTitle">Add a branch circuit</h2>
+            <p>This creates a demo card in this browser only. It will not control a relay or add a real sensor.</p>
+            <label for="branchNameInput">Appliance name</label>
+            <input id="branchNameInput" name="branchName" type="text" maxlength="40" placeholder="For example, Laundry" required autocomplete="off">
+            <div class="branch-dialog-actions">
+                <button class="branch-cancel" type="button" data-close-branch-dialog>Cancel</button>
+                <button class="branch-submit" type="submit">Add demo appliance</button>
+            </div>
+        </form>
+    </dialog>
+    {% endif %}
 
     <main class="view-shell analytics-view" id="analyticsView"><section class="analytics-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Live telemetry</p><h3>Latest measured power by channel</h3></div></div><div class="analytics-chart-wrap"><canvas id="analyticsChart" width="1100" height="420" aria-label="Latest power measurements"></canvas></div></section></main>
 
@@ -87,6 +111,121 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
 
 const historyDateInput = document.getElementById('historyDate');
 historyDateInput.addEventListener('change', loadHistory);
+
+// Demo branch circuits are local to this browser and never enter the device API.
+const demoBranchStorageKey = 'energyDashboardDemoBranches';
+const demoBranchGrid = document.querySelector('.channel-grid');
+const addBranchDialog = document.getElementById('addBranchDialog');
+const addBranchForm = document.getElementById('addBranchForm');
+const branchNameInput = document.getElementById('branchNameInput');
+
+function readDemoBranches() {
+    try {
+        const branches = JSON.parse(localStorage.getItem(demoBranchStorageKey) || '[]');
+        return Array.isArray(branches) ? branches.filter(item => item && typeof item.id === 'string' && typeof item.name === 'string') : [];
+    } catch (_error) {
+        return [];
+    }
+}
+
+function saveDemoBranches(branches) {
+    try { localStorage.setItem(demoBranchStorageKey, JSON.stringify(branches)); }
+    catch (_error) { /* The current page can still show the demo card without storage. */ }
+}
+
+function createDemoBranchCard(branch, index) {
+    const card = document.createElement('article');
+    card.className = 'load-card demo-load-card';
+    card.dataset.demoBranch = branch.id;
+
+    const top = document.createElement('div');
+    top.className = 'card-topline';
+    const meta = document.createElement('div');
+    meta.className = 'channel-meta';
+    const channel = document.createElement('span');
+    channel.className = 'channel-id';
+    channel.textContent = `DEMO CH ${String(index + 4).padStart(2, '0')}`;
+    const title = document.createElement('h2');
+    title.textContent = branch.name;
+    const slave = document.createElement('small');
+    slave.textContent = 'Not assigned to a sensor';
+    const remove = document.createElement('button');
+    remove.className = 'remove-demo-branch';
+    remove.type = 'button';
+    remove.dataset.removeBranch = branch.id;
+    remove.textContent = 'Remove';
+    remove.setAttribute('aria-label', `Remove ${branch.name} demo appliance`);
+    meta.append(channel, title, slave);
+    top.append(meta, remove);
+
+    const metrics = document.createElement('div');
+    metrics.className = 'metric-grid';
+    [['Voltage', '-- V'], ['Current', '-- A'], ['Energy', '-- kWh']].forEach(([label, value]) => {
+        const box = document.createElement('div');
+        box.className = 'metric-box';
+        const inner = document.createElement('div');
+        const caption = document.createElement('label');
+        caption.textContent = label;
+        const reading = document.createElement('strong');
+        reading.className = 'metric-value';
+        reading.textContent = value;
+        inner.append(caption, reading);
+        box.append(inner);
+        metrics.append(box);
+    });
+
+    const gauge = document.createElement('div');
+    gauge.className = 'gauge-panel';
+    const ring = document.createElement('div');
+    ring.className = 'gauge-ring demo-gauge-ring';
+    const gaugeValue = document.createElement('div');
+    gaugeValue.className = 'gauge-value';
+    const power = document.createElement('span');
+    power.textContent = '-- W';
+    const timestamp = document.createElement('small');
+    timestamp.textContent = 'Demo only';
+    gaugeValue.append(power, timestamp);
+    ring.append(gaugeValue);
+    gauge.append(ring);
+
+    const note = document.createElement('p');
+    note.className = 'demo-branch-note';
+    note.textContent = 'Preview only · no live readings or relay control';
+    card.append(top, metrics, gauge, note);
+    return card;
+}
+
+function renderDemoBranches() {
+    if (!demoBranchGrid) return;
+    demoBranchGrid.querySelectorAll('[data-demo-branch]').forEach(card => card.remove());
+    const addButton = document.getElementById('addBranchButton');
+    readDemoBranches().forEach((branch, index) => demoBranchGrid.insertBefore(createDemoBranchCard(branch, index), addButton));
+}
+
+document.getElementById('addBranchButton')?.addEventListener('click', () => {
+    addBranchForm.reset();
+    addBranchDialog.showModal();
+    branchNameInput.focus();
+});
+document.querySelectorAll('[data-close-branch-dialog]').forEach(button => button.addEventListener('click', () => addBranchDialog.close()));
+addBranchForm?.addEventListener('submit', event => {
+    event.preventDefault();
+    const name = branchNameInput.value.trim();
+    if (!name) return;
+    const branches = readDemoBranches();
+    branches.push({id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`, name});
+    saveDemoBranches(branches);
+    renderDemoBranches();
+    addBranchDialog.close();
+});
+demoBranchGrid?.addEventListener('click', event => {
+    const removeButton = event.target.closest('[data-remove-branch]');
+    if (!removeButton) return;
+    const remaining = readDemoBranches().filter(branch => branch.id !== removeButton.dataset.removeBranch);
+    saveDemoBranches(remaining);
+    renderDemoBranches();
+});
+renderDemoBranches();
 
 async function loadHistory() {
     const day = historyDateInput.value;
@@ -138,7 +277,7 @@ function drawLoadSeries(series) {
     }
 
     const colors = {1: '#63d8ff', 2: '#a78bfa', 3: '#61e6a5'};
-    const labels = {1: 'Lighting (Slave 1)', 2: 'ACU (Slave 2)', 3: 'SPO (Slave 3)'};
+    const labels = {1: 'Lighting (Slave 1)', 2: 'Convenience outlet (Slave 2)', 3: 'Special purpose outlet (Slave 3)'};
     const powerValues = series.flatMap(point => [point.slave_1, point.slave_2, point.slave_3]
         .filter(value => value !== null && Number.isFinite(Number(value))).map(Number));
     const maxPower = Math.max(10, Math.ceil(Math.max(...powerValues) / 10) * 10);
