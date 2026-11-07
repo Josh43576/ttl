@@ -41,6 +41,9 @@ body{margin:0;min-width:320px;min-height:100vh;background:radial-gradient(ellips
 .trip-symbol{width:30px;height:30px;flex:0 0 30px;display:grid;place-items:center;border:1px solid #ff7d8380;border-radius:50%;color:var(--red);font-weight:800}
 .trip-banner strong{color:#ffdadd;font-size:12px}.trip-banner p{margin:3px 0 0;color:#f0b9bd;font-size:10px;line-height:1.4}
 .branch-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px}
+.branch-nav{display:none;align-items:center;justify-content:center;gap:14px;margin:8px auto 0}
+.branch-nav button{width:38px;height:34px;border:1px solid #66edff55;border-radius:10px;color:var(--cyan);background:#66edff12;font:700 24px/1 Manrope;touch-action:manipulation}
+.branch-nav span{min-width:110px;color:#c8dae4;text-align:center;font:9px 'DM Mono',monospace}
 .branch-card{min-width:0;padding:15px;border:1px solid #ffffff18;border-radius:16px;background:linear-gradient(145deg,#14232f,#0c1720);box-shadow:0 13px 38px #0002}
 .branch-card.is-tripped{border-color:#ff7d8380;background:linear-gradient(145deg,#3d1b25,#17131a);box-shadow:0 0 25px #ff7d8312}
 .branch-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
@@ -64,4 +67,31 @@ body{margin:0;min-width:320px;min-height:100vh;background:radial-gradient(ellips
 .kiosk-toast{position:fixed;z-index:4;left:50%;bottom:50px;max-width:90vw;transform:translate(-50%,12px);padding:10px 16px;border:1px solid #66edff55;border-radius:12px;background:#0e1c25;color:#dffcff;font-size:11px;text-align:center;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
 .kiosk-toast.is-visible{opacity:1;transform:translate(-50%,0)}
 @media(max-width:760px){.standby-screen{grid-template-columns:1fr;gap:16px;padding:20px 0}.standby-aside{grid-template-columns:1fr 1fr}.idle-panel{padding:14px}.inspect-heading{align-items:flex-start;flex-direction:column}.branch-grid{grid-template-columns:1fr 1fr}}
-@media(max-width:500px){.kiosk-shell{padding:10px 11px 9px}.kiosk-header{height:47px;padding-bottom:8px}.brand{font-size:10px}.brand-mark{width:29px;height:29px}.brand-subtitle{font-size:7px}.clock-wrap{font-size:8px}.clock-wrap strong{font-size:14px}.standby-screen{gap:12px;padding:13px 0}.lock-orbit{margin-bottom:12px}.standby-main h1{font-size:27px}.standby-copy{font-size:11px}.scan-prompt{margin-top:15px;padding:10px 13px;font-size:9px}.standby-aside{gap:8px}.idle-panel{padding:11px;border-radius:13px}.panel-kicker{font-size:7px}.idle-panel blockquote{font-size:11px;margin:7px 0}.quote-author,.tip-panel p{font-size:9px}.inspect-screen{padding-top:14px}.inspect-heading h1{font-size:25px}.confirm-badge{font-size:8px;padding:8px 10px}.branch-grid{grid-template-columns:1fr;gap:8px}.branch-card{padding:11px}.reading-grid{margin-top:10px}.reading-metric{padding:7px}.inspect-footer{flex-direction:column}.footer-lock{font-size:7px}.system-footer{font-size:7px}.kiosk-toast{bottom:42px;font-size:9px}}
+@media(max-width:500px){
+  .kiosk-shell{min-height:100dvh;padding:5px 7px 4px}
+  .kiosk-header{height:36px;flex:0 0 36px;padding-bottom:4px}
+  .brand{gap:6px;font-size:8px}.brand-mark{width:25px;height:25px;border-radius:8px;font-size:14px}.brand-subtitle{font-size:6px;margin-top:1px}
+  .clock-wrap{font-size:7px}.clock-wrap strong{font-size:12px;margin-top:1px}
+  .standby-screen{grid-template-columns:1.05fr .95fr;gap:5px;padding:5px 0;align-items:center}
+  .standby-main{padding:0 2px}.lock-orbit{width:53px;height:53px;margin-bottom:5px}.lock-icon{transform:scale(.76)}
+  .eyebrow{font-size:6px;letter-spacing:.1em}.standby-main h1{font-size:18px;margin:4px 0}
+  .standby-copy{font-size:8px;line-height:1.25}.scan-prompt{gap:7px;margin-top:9px;padding:8px 9px;font-size:7px;letter-spacing:.04em}
+  .scan-wave{width:7px;height:7px}.standby-aside{grid-template-columns:1fr;gap:5px}.idle-panel{padding:7px;border-radius:9px}
+  .panel-kicker{font-size:6px;letter-spacing:.1em}.idle-panel blockquote{font-size:8px;line-height:1.25;margin:4px 0}
+  .quote-author,.tip-panel p{font-size:7px;line-height:1.25}.tip-panel p{margin-top:4px}
+  .inspect-screen{padding:5px 0 0;min-height:0;overflow:hidden}
+  .inspect-heading{flex-direction:row;align-items:center;gap:5px;margin-bottom:6px}
+  .inspect-heading h1{font-size:17px;margin:2px 0}.inspect-heading .eyebrow{font-size:6px}.inspect-message{font-size:7px;line-height:1.2;max-width:225px}
+  .confirm-badge{gap:4px;padding:5px 6px;font-size:6px;letter-spacing:.02em}.confirm-badge span{width:5px;height:5px}
+  .trip-banner{gap:6px;padding:5px 7px;margin-bottom:6px;border-radius:8px;max-height:34px;overflow:hidden}
+  .trip-symbol{width:20px;height:20px;flex-basis:20px;font-size:11px}.trip-banner strong{font-size:8px}.trip-banner p{margin:1px 0 0;font-size:6px;line-height:1.1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .branch-grid{display:block;height:151px;overflow:hidden;touch-action:pan-y}
+  .branch-card{display:none;padding:8px;border-radius:10px;min-height:0}.branch-card.is-active{display:block;animation:cardIn .18s ease-out}
+  @keyframes cardIn{from{opacity:.55;transform:translateX(5px)}to{opacity:1;transform:translateX(0)}}
+  .branch-card-top{gap:4px}.channel-caption{font-size:6px}.branch-card h2{font-size:12px;margin-top:3px}.branch-status{padding:3px 5px;font-size:6px}
+  .reading-grid{gap:4px;margin-top:7px}.reading-metric{padding:5px 6px;border-radius:6px}.reading-metric span{font-size:6px}.reading-metric strong{font-size:11px;margin-top:2px}
+  .budget-line{margin:5px 0 0;font-size:7px}.branch-note{margin:5px 0 0;font-size:7px;line-height:1.2}
+  .branch-nav{display:flex;gap:11px;margin:3px auto 0}.branch-nav button{width:29px;height:25px;border-radius:7px;font-size:18px}.branch-nav span{min-width:100px;font-size:7px}
+  .inspect-footer{display:flex;justify-content:center;margin-top:4px;font-size:6px}.inspect-footer span:first-child{display:none}.footer-lock{font-size:6px}
+  .system-footer{display:none}.kiosk-toast{bottom:8px;padding:7px 9px;font-size:8px}
+}
