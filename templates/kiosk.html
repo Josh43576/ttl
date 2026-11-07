@@ -32,11 +32,6 @@
             <div class="inspect-heading"><div><p class="eyebrow">AUTHORIZED INSPECTION</p><h1 id="inspectTitle">Circuit overview</h1><p id="inspectMessage" class="inspect-message">Review the current readings before confirming reset.</p></div><div class="confirm-badge"><span></span> SECOND SCAN TO RESET</div></div>
             <div class="trip-banner" id="tripBanner" hidden><span class="trip-symbol">!</span><div><strong id="tripTitle">Circuit cutoff detected</strong><p id="tripDescription"></p></div></div>
             <div class="branch-grid" id="branchGrid" aria-live="polite"></div>
-            <nav class="branch-nav" id="branchNav" aria-label="Branch circuit navigation" hidden>
-                <button type="button" id="previousBranch" aria-label="Previous circuit">‹</button>
-                <span id="branchPosition" aria-live="polite"></span>
-                <button type="button" id="nextBranch" aria-label="Next circuit">›</button>
-            </nav>
             <footer class="inspect-footer"><span>Scan the same authorized card again to log this inspection, reset eligible trips, and return to standby.</span><span class="footer-lock">LOCKS AFTER CONFIRMATION</span></footer>
         </section>
 
@@ -72,8 +67,6 @@ document.getElementById('dailyTip').textContent = tips[dayIndex % tips.length];
 const standby = document.getElementById('standbyScreen');
 const inspect = document.getElementById('inspectScreen');
 const branchGrid = document.getElementById('branchGrid');
-const branchNav = document.getElementById('branchNav');
-let activeBranchIndex = 0;
 const toast = document.getElementById('kioskToast');
 let previousMessage = '';
 
@@ -154,30 +147,7 @@ function renderBranches(branches) {
         empty.textContent = 'No branch configurations are available.';
         branchGrid.append(empty);
     }
-    activeBranchIndex = Math.min(activeBranchIndex, Math.max(0, branches.length - 1));
-    branchNav.hidden = branches.length < 2;
-    showBranch(activeBranchIndex);
 }
-
-function showBranch(index) {
-    const cards = [...branchGrid.querySelectorAll('.branch-card')];
-    if (!cards.length) return;
-    activeBranchIndex = (index + cards.length) % cards.length;
-    cards.forEach((card, cardIndex) => card.classList.toggle('is-active', cardIndex === activeBranchIndex));
-    const current = cards[activeBranchIndex].querySelector('h2')?.textContent || 'Circuit';
-    document.getElementById('branchPosition').textContent = `${activeBranchIndex + 1} / ${cards.length} · ${current}`;
-}
-
-document.getElementById('previousBranch').addEventListener('click', () => showBranch(activeBranchIndex - 1));
-document.getElementById('nextBranch').addEventListener('click', () => showBranch(activeBranchIndex + 1));
-let touchStartX = null;
-branchGrid.addEventListener('touchstart', event => { touchStartX = event.changedTouches[0]?.screenX ?? null; }, {passive: true});
-branchGrid.addEventListener('touchend', event => {
-    if (touchStartX === null) return;
-    const deltaX = event.changedTouches[0].screenX - touchStartX;
-    if (Math.abs(deltaX) > 36) showBranch(activeBranchIndex + (deltaX < 0 ? 1 : -1));
-    touchStartX = null;
-}, {passive: true});
 
 function showToast(message) {
     if (!message || message === previousMessage || message.includes('Scan your authorized')) return;
@@ -211,9 +181,6 @@ async function refreshKiosk() {
 }
 refreshKiosk();
 window.setInterval(refreshKiosk, 1200);
-window.setInterval(() => {
-    if (!inspect.hidden && window.matchMedia('(max-width: 500px)').matches) showBranch(activeBranchIndex + 1);
-}, 7000);
 </script>
 </body>
 </html>
