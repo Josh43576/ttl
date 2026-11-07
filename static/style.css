@@ -1088,7 +1088,6 @@ textarea:focus {
 }
 
 .add-branch-card strong { font-size: 1.05rem; letter-spacing: 0.04em; }
-.add-branch-card small { color: rgba(223, 234, 255, 0.58); }
 
 .demo-load-card {
     border-color: rgba(0, 240, 255, 0.28);

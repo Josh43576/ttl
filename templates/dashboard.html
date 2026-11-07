@@ -41,7 +41,6 @@
             <button class="add-branch-card" id="addBranchButton" type="button" aria-haspopup="dialog" aria-controls="addBranchDialog">
                 <span class="add-branch-icon" aria-hidden="true">+</span>
                 <strong>Add branch circuit</strong>
-                <small>Create a removable demo appliance</small>
             </button>
             {% endif %}
         </section>
@@ -277,7 +276,7 @@ function drawLoadSeries(series) {
     }
 
     const colors = {1: '#63d8ff', 2: '#a78bfa', 3: '#61e6a5'};
-    const labels = {1: 'Lighting (Slave 1)', 2: 'Convenience outlet (Slave 2)', 3: 'Special purpose outlet (Slave 3)'};
+    const labels = {1: 'Special purpose outlet (Slave 1)', 2: 'Lighting outlet (Slave 2)', 3: 'Convenience outlet (Slave 3)'};
     const powerValues = series.flatMap(point => [point.slave_1, point.slave_2, point.slave_3]
         .filter(value => value !== null && Number.isFinite(Number(value))).map(Number));
     const maxPower = Math.max(10, Math.ceil(Math.max(...powerValues) / 10) * 10);
