@@ -25,8 +25,8 @@ from utils.server import (
 shutdown_requested = False
 BASELINE_MODE = os.environ.get("BASELINE_MODE", "1").strip().lower() in {"1", "true", "yes"}
 DEVICE_KEYS = ("acu", "outlet", "lighting")
-# Circuit mapping: lighting = slave 1, convenience = slave 2, SPO = slave 3.
-SENSOR_ID_BY_DEVICE = {"acu": 1, "outlet": 2, "lighting": 3}
+# Swap only slaves 1 and 3; convenience remains assigned to slave 2.
+SENSOR_ID_BY_DEVICE = {"acu": 3, "outlet": 2, "lighting": 1}
 DEFAULT_APPLIANCE_NAMES = ["Appliance 1", "Appliance 2", "Appliance 3"]
 appliance_names = DEFAULT_APPLIANCE_NAMES.copy()
 root_dir = os.path.dirname(os.path.abspath(__file__))

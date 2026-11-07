@@ -26,7 +26,7 @@ DEFAULT_APPLIANCE_CONFIGS = {
     "outlet": {"display_name": "Convenience outlet", "kw_limit": 5.0, "energy_limit_wh": 500.0},
     "lighting": {"display_name": "Special purpose outlet", "kw_limit": 2.0, "energy_limit_wh": 500.0},
 }
-SENSOR_ID_BY_DEVICE = {"acu": 1, "outlet": 2, "lighting": 3}
+SENSOR_ID_BY_DEVICE = {"acu": 3, "outlet": 2, "lighting": 1}
 PZEM_PORT_BY_SLAVE_ID = {1: "/dev/ttyUSB1", 2: "/dev/ttyUSB0", 3: "/dev/ttyUSB2"}
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or secrets.token_hex(32)
