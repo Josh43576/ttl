@@ -242,11 +242,12 @@ async function loadHistory() {
             const value = payload.consumption_kwh[String(slave)];
             document.querySelector(`[data-daily-kwh="${slave}"]`).textContent = value === null ? '-- kWh' : `${Number(value).toFixed(4)} kWh`;
         }
-        if (payload.partial) {
-            status.textContent = 'Some meter data is missing or starts after midnight; totals may be partial. Energy uses cumulative PZEM counter changes.';
-        } else {
-            status.textContent = `Showing ${payload.date} in ${payload.timezone}; energy is calculated from each meter’s cumulative counter.`;
-        }
+        const counts = payload.power_sample_count || {};
+        const sampleSummary = [1, 2, 3].map(slave => `Slave ${slave}: ${Number(counts[String(slave)] || 0)} samples`).join(' · ');
+        const historySummary = payload.partial
+            ? 'Some meter energy totals may be partial; totals use cumulative PZEM counter changes.'
+            : `Energy is calculated from each meter’s cumulative counter.`;
+        status.textContent = `Showing ${payload.date} in ${payload.timezone}. ${historySummary} Samples saved: ${sampleSummary}.`;
         drawLoadSeries(payload.series || []);
     } catch (error) {
         document.querySelector('[data-daily-total]').textContent = '-- kWh';
