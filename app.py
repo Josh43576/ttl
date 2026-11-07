@@ -813,9 +813,33 @@ def api_rfid_reset():
         if not entry.is_tripped:
             continue
         if entry.trip_reason == 'sensor_fault':
+            slave_id = SENSOR_ID_BY_DEVICE[entry.appliance_key]
+            latest = Log.query.filter_by(slave_id=slave_id).order_by(Log.date_recorded.desc()).first()
+            age = (now - latest.date_recorded).total_seconds() if latest and latest.date_recorded else None
+            sensor_recovered = latest is not None and age is not None and 0 <= age <= 15
+            if sensor_recovered:
+                try:
+                    sensor_recovered = all(
+                        value is not None and math.isfinite(float(value)) and float(value) >= 0
+                        for value in (latest.voltage, latest.current, latest.power, latest.energy)
+                    )
+                except (TypeError, ValueError):
+                    sensor_recovered = False
+            if not sensor_recovered:
+                entry.requested_state = 'OFF'
+                faults_left_latched.append(entry.display_name)
+                continue
+
+            entry.is_tripped = False
             entry.requested_state = 'OFF'
             entry.resume_after_trip = False
-            faults_left_latched.append(entry.display_name)
+            manual_restart_required.append(entry.display_name)
+            entry.trip_reason = None
+            entry.trip_value = None
+            entry.trip_limit = None
+            entry.trip_unit = None
+            entry.resume_after_trip = False
+            entry.updated_at = now
             continue
         if entry.trip_reason is None:
             # Upgrade path for trip latches written before trip reasons were stored.
