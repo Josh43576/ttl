@@ -651,7 +651,8 @@ def dashboard():
 def kiosk():
     if not current_user.is_admin:
         abort(403)
-    return render_template('kiosk.html')
+    session.setdefault('csrf_token', secrets.token_urlsafe(32))
+    return render_template('kiosk.html', admin_fallback=request.args.get('fallback') == '1', csrf_token=session['csrf_token'])
 
 
 @app.route('/api/kiosk/state')
@@ -663,7 +664,7 @@ def api_kiosk_state():
         kiosk_state = dict(KIOSK_STATE)
     result = {'unlocked': bool(kiosk_state['unlocked']), 'message': kiosk_state['message'],
               'updated_at': kiosk_state['updated_at']}
-    if not result['unlocked']:
+    if not result['unlocked'] and request.args.get('fallback') != '1':
         return jsonify(result)
 
     entries = ordered_appliance_configs()
@@ -693,6 +694,7 @@ def api_kiosk_state():
             'trip_limit': entry.trip_limit,
             'trip_unit': entry.trip_unit,
             'energy_limit_wh': entry.energy_limit_wh,
+            'requested_state': entry.requested_state,
         })
     result['branches'] = branches
     result['server_time'] = datetime.datetime.now(APP_TIMEZONE).isoformat()
@@ -797,12 +799,8 @@ def api_control():
     })
 
 
-@app.route('/api/rfid-reset', methods=['POST'])
-def api_rfid_reset():
-    """Clear eligible power-limit trips and resume only branches active before cutoff."""
-    denied = require_device_token()
-    if denied:
-        return denied
+def reset_tripped_branches(source):
+    """Apply the same guarded latch reset for RFID and password-authorized admin fallback."""
     entries = ordered_appliance_configs()
     resumed = []
     reset_energy_slaves = []
@@ -877,9 +875,10 @@ def api_rfid_reset():
         entry.trip_unit = None
         entry.resume_after_trip = False
         entry.updated_at = now
+    source_label = 'RFID' if source == 'rfid_reset' else 'administrator password fallback'
     db.session.add(PowerEvent(
-        event_type='rfid_reset',
-        message=(f"Authorized RFID reset; resumed {len(resumed)} branch(es). "
+        event_type=source,
+        message=(f"Authorized {source_label}; resumed {len(resumed)} branch(es). "
                  f"manual restart required: {', '.join(manual_restart_required) or 'none'}; "
                  f"faults remain latched: {', '.join(faults_left_latched) or 'none'}; "
                  "meter readings are retained in telemetry history."),
@@ -887,9 +886,9 @@ def api_rfid_reset():
     db.session.commit()
     with KIOSK_STATE_LOCK:
         KIOSK_STATE['unlocked'] = False
-        KIOSK_STATE['message'] = 'Reset sequence complete. Scan your authorized RFID card to inspect circuits.'
+        KIOSK_STATE['message'] = 'Reset sequence complete. Inspect the live readings before restoring any branch.'
         KIOSK_STATE['updated_at'] = now.isoformat()
-    return jsonify({
+    return {
         'status': 'reset',
         'resumed': resumed,
         'manual_restart_required': manual_restart_required,
@@ -897,7 +896,29 @@ def api_rfid_reset():
         'appliances': [entry.requested_state for entry in entries],
         'tripped': [bool(entry.is_tripped) for entry in entries],
         'energy_reset_slaves': sorted(reset_energy_slaves),
-    }), 200
+    }
+
+
+@app.route('/api/rfid-reset', methods=['POST'])
+def api_rfid_reset():
+    """Clear eligible power-limit trips and resume only branches active before cutoff."""
+    denied = require_device_token()
+    if denied:
+        return denied
+    return jsonify(reset_tripped_branches('rfid_reset')), 200
+
+
+@app.route('/api/kiosk/manual-reset', methods=['POST'])
+@login_required
+def api_kiosk_manual_reset():
+    """Password re-authenticated admin fallback using the same safeguards as RFID reset."""
+    if not current_user.is_admin or not csrf_valid():
+        return jsonify({'error': 'administrator session and CSRF token required'}), 403
+    payload = request.get_json(silent=True)
+    password = payload.get('password') if isinstance(payload, dict) else None
+    if not isinstance(password, str) or not current_user.check_password(password):
+        return jsonify({'error': 'Administrator password was not accepted.'}), 401
+    return jsonify(reset_tripped_branches('admin_manual_reset')), 200
 
 
 @app.route('/api/device-trip', methods=['POST'])

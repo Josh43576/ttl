@@ -4,10 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#071018">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>Energy Access Control</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='kiosk.css') }}?v=kiosk-center-2">
+    <link rel="stylesheet" href="{{ url_for('static', filename='kiosk.css') }}?v=admin-fallback-1">
 </head>
-<body>
+<body class="{{ 'admin-fallback' if admin_fallback else '' }}">
     <main class="kiosk-shell">
         <header class="kiosk-header">
             <a class="brand" href="{{ url_for('dashboard') }}" aria-label="Return to web dashboard"><span class="brand-mark">E</span><span>ENERGY ACCESS<span class="brand-subtitle">BRANCH CIRCUIT CONTROL</span></span></a>
@@ -21,13 +22,21 @@
                 <h1 id="standbyTitle">System locked</h1>
                 <p class="standby-copy">Present an authorized RFID card to inspect the branch circuits.</p>
                 <div class="scan-prompt"><span class="scan-wave" aria-hidden="true"></span><strong>SCAN YOUR RFID CARD</strong></div>
+                {% if not admin_fallback %}<a class="fallback-link" href="{{ url_for('kiosk', fallback=1) }}">Administrator fallback</a>{% endif %}
             </div>
         </section>
 
         <section class="inspect-screen" id="inspectScreen" aria-labelledby="inspectTitle" hidden>
-            <div class="inspect-heading"><div><p class="eyebrow">AUTHORIZED INSPECTION</p><h1 id="inspectTitle">Circuit overview</h1><p id="inspectMessage" class="inspect-message">Review the current readings before confirming reset.</p></div><div class="confirm-badge"><span></span> SECOND SCAN TO RESET</div></div>
+            <div class="inspect-heading"><div><p class="eyebrow" id="inspectEyebrow">AUTHORIZED INSPECTION</p><h1 id="inspectTitle">Circuit overview</h1><p id="inspectMessage" class="inspect-message">Review the current readings before confirming reset.</p></div><div class="confirm-badge" id="confirmBadge"><span></span> SECOND SCAN TO RESET</div></div>
             <div class="trip-banner" id="tripBanner" hidden><span class="trip-symbol">!</span><div><strong id="tripTitle">Circuit cutoff detected</strong><p id="tripDescription"></p></div></div>
             <div class="branch-grid" id="branchGrid" aria-live="polite"></div>
+            {% if admin_fallback %}
+            <form class="manual-reset-form" id="manualResetForm">
+                <label for="adminResetPassword">Administrator password to authorize guarded reset</label>
+                <div class="manual-reset-controls"><input id="adminResetPassword" name="password" type="password" autocomplete="current-password" required><button type="submit">Authorize manual reset</button></div>
+                <p>Limits remain active. Sensor faults stay latched until readings recover; meter history is retained.</p>
+            </form>
+            {% endif %}
             <aside class="inspect-aside idle-panel" aria-label="Daily energy guidance">
                 <article class="quote-panel"><span class="panel-kicker">TODAY'S THOUGHT</span><blockquote id="dailyQuote"></blockquote><span id="quoteAuthor" class="quote-author"></span></article>
                 <article class="tip-panel"><span class="panel-kicker">ENERGY EFFICIENCY TIP</span><p id="dailyTip"></p></article>
@@ -68,6 +77,8 @@ const standby = document.getElementById('standbyScreen');
 const inspect = document.getElementById('inspectScreen');
 const branchGrid = document.getElementById('branchGrid');
 const toast = document.getElementById('kioskToast');
+const adminFallback = {{ 'true' if admin_fallback else 'false' }};
+const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
 let previousMessage = '';
 
 function updateClock() {
@@ -126,6 +137,8 @@ function renderBranches(branches) {
         addMetric(metrics, 'VOLTAGE', branch.voltage == null ? '— V' : `${Number(branch.voltage).toFixed(1)} V`);
         addMetric(metrics, 'CURRENT', branch.current == null ? '— A' : `${Number(branch.current).toFixed(3)} A`);
         addMetric(metrics, 'TODAY', branch.daily_energy_wh == null ? '— Wh' : `${Number(branch.daily_energy_wh).toFixed(1)} Wh`);
+        addMetric(metrics, 'METER TOTAL', branch.energy_kwh == null ? '— kWh' : `${Number(branch.energy_kwh).toFixed(3)} kWh`);
+        addMetric(metrics, 'DAILY LIMIT', `${Number(branch.energy_limit_wh).toFixed(1)} Wh`);
         const budget = document.createElement('p');
         budget.className = 'budget-line';
         budget.textContent = branch.daily_energy_wh == null
@@ -159,15 +172,20 @@ function showToast(message) {
 
 async function refreshKiosk() {
     try {
-        const response = await fetch('/api/kiosk/state', {cache: 'no-store'});
+        const response = await fetch(adminFallback ? '/api/kiosk/state?fallback=1' : '/api/kiosk/state', {cache: 'no-store'});
         if (!response.ok) throw new Error('Kiosk status unavailable');
         const state = await response.json();
         document.getElementById('connectionStatus').textContent = 'Device monitor connected';
         document.getElementById('onlineDot').classList.add('is-online');
-        standby.hidden = Boolean(state.unlocked);
-        inspect.hidden = !state.unlocked;
-        if (state.unlocked) {
-            document.getElementById('inspectMessage').textContent = state.message;
+        const showInspection = Boolean(state.unlocked) || adminFallback;
+        standby.hidden = showInspection;
+        inspect.hidden = !showInspection;
+        if (showInspection) {
+            document.getElementById('inspectEyebrow').textContent = adminFallback ? 'ADMINISTRATOR FALLBACK' : 'AUTHORIZED INSPECTION';
+            document.getElementById('inspectMessage').textContent = adminFallback
+                ? 'Live sensor data. Enter the administrator password below to perform the guarded reset.'
+                : state.message;
+            document.getElementById('confirmBadge').hidden = adminFallback;
             renderBranches(state.branches || []);
         } else {
             showToast(state.message);
@@ -178,6 +196,29 @@ async function refreshKiosk() {
         standby.hidden = false;
         inspect.hidden = true;
     }
+}
+const manualResetForm = document.getElementById('manualResetForm');
+if (manualResetForm) {
+    manualResetForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        const passwordInput = manualResetForm.elements.password;
+        try {
+            const response = await fetch('/api/kiosk/manual-reset', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
+                body: JSON.stringify({password: passwordInput.value}),
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || 'Manual reset was not authorized.');
+            manualResetForm.reset();
+            showToast('Guarded reset complete. Sensor faults remain latched until readings recover.');
+            refreshKiosk();
+        } catch (error) {
+            passwordInput.value = '';
+            passwordInput.focus();
+            showToast(error.message || 'Manual reset failed.');
+        }
+    });
 }
 refreshKiosk();
 window.setInterval(refreshKiosk, 1200);
