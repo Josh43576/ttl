@@ -255,7 +255,7 @@ async function loadHistory() {
         const sampleSummary = [1, 2, 3].map(slave => `Slave ${slave}: ${Number(counts[String(slave)] || 0)} samples`).join(' · ');
         const historySummary = payload.partial
             ? 'Some meter energy totals may be partial; totals use cumulative PZEM counter changes.'
-            : `Energy is calculated from each meter’s cumulative counter.`;
+            : 'Energy totals use recorded meter counters or supplied daily circuit totals.';
         status.textContent = `Showing ${payload.range_label || payload.date} in ${payload.timezone}. ${historySummary} Samples saved: ${sampleSummary}.`;
         drawLoadSeries(payload.series || []);
     } catch (error) {

@@ -1131,6 +1131,21 @@ def api_consumption():
         for sid in (1, 2, 3):
             values = energy_values[sid]
             if not values:
+                if period in {'month', 'year'}:
+                    daily_totals = {}
+                    for row in rows:
+                        if row.slave_id != sid or row.date_recorded is None or row.daily_energy_wh is None:
+                            continue
+                        try:
+                            daily_wh = float(row.daily_energy_wh)
+                        except (TypeError, ValueError):
+                            continue
+                        if math.isfinite(daily_wh) and daily_wh >= 0:
+                            local_day = row.date_recorded.replace(tzinfo=datetime.timezone.utc).astimezone(APP_TIMEZONE).date()
+                            daily_totals[local_day] = daily_wh
+                    if daily_totals:
+                        consumption[sid] = sum(daily_totals.values()) / 1000.0
+                        continue
                 consumption[sid] = None
                 partial = True
                 continue
@@ -1207,6 +1222,16 @@ def api_consumption():
         if previous_energy is not None and (not math.isfinite(previous_energy) or previous_energy < 0):
             previous_energy = None
 
+        if not rows_with_energy:
+            daily_rows = [row for row in rows_by_slave[slave_id] if row.daily_energy_wh is not None]
+            if daily_rows:
+                try:
+                    daily_wh = float(daily_rows[-1].daily_energy_wh)
+                except (TypeError, ValueError):
+                    daily_wh = -1
+                if math.isfinite(daily_wh) and daily_wh >= 0:
+                    consumption[slave_id] = daily_wh / 1000.0
+                    continue
         if previous_energy is None and len(rows_with_energy) < 2:
             consumption[slave_id] = None
             partial = True
