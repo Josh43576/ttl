@@ -100,6 +100,10 @@ def init_reader():
         print("RPi.GPIO unavailable; RFID reset is disabled.")
         return False
     try:
+        if not os.path.exists("/dev/spidev0.0"):
+            raise RuntimeError("/dev/spidev0.0 is missing; enable SPI with raspi-config and reboot")
+        if not os.access("/dev/spidev0.0", os.R_OK | os.W_OK):
+            raise RuntimeError("no read/write access to /dev/spidev0.0; check the service user's SPI permissions")
         current_mode = GPIO.getmode()
         if current_mode is None:
             GPIO.setmode(GPIO.BCM)

@@ -9,6 +9,24 @@ The MPI3508 uses its HDMI connection for video. The kiosk page runs in a browser
 - The Pi's `.env` contains the authorized card IDs in `RFID_RESET_IDS`, the shared `DEVICE_API_TOKEN`, and `BASELINE_MODE=0` when relay control is intended.
 - An administrator account is available for the browser session.
 
+## RC522 on Raspberry Pi 3 Model B+
+
+The Pi 3 Model B+ uses the same 40-pin header and BCM GPIO numbering as the Pi 3. The reader code uses SPI CE0 and reset on BCM GPIO25 by default. Check the wiring and SPI device after replacing the board:
+
+| RC522 pin | Pi header pin | BCM signal |
+| --- | ---: | --- |
+| SDA / SS | 24 | GPIO8 / SPI CE0 |
+| SCK | 23 | GPIO11 / SPI SCLK |
+| MOSI | 19 | GPIO10 / SPI MOSI |
+| MISO | 21 | GPIO9 / SPI MISO |
+| RST | 22 | GPIO25 (default `RFID_RST_GPIO`) |
+| GND | 6 | Ground |
+| 3.3V | 1 | 3.3V only |
+
+Do not power the RC522 from 5V. Enable SPI with `sudo raspi-config` → **Interface Options** → **SPI** → **Enable**, then reboot. Confirm `/dev/spidev0.0` exists with `ls -l /dev/spidev0.0`, and run the service as a user allowed to access SPI/GPIO (the `gpio` group is commonly used). Check the `main.py` service output for `RFID kiosk ready`; if it reports the library or GPIO is missing, install the project requirements in the same Python environment used by the service and restart it. `RFID_RESET_IDS` must contain the authorized card UID(s) in the Pi `.env` or scans will not unlock the kiosk.
+
+If the wiring and SPI device are correct but scans still fail, capture the exact startup and `RFID read error` messages from the service journal. That identifies whether the remaining issue is permissions, Python package compatibility, reset wiring, or the reader/module itself.
+
 ## Open the kiosk
 
 1. On the Raspberry Pi browser, sign in to the web dashboard as an administrator.

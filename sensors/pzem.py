@@ -286,16 +286,18 @@ def read_pzem(port, slave_id: int = 1):
             "current": None,
             "power": None,
             "energy": None,
+            "frequency": None,
+            "power_factor": None,
             "error": "pyserial is not installed; install the project dependencies to read PZEM sensors.",
         }
 
     if RS485_DE_RE_PIN in {17, 27, 22}:
         return {"slave_id": slave_id, "voltage": None, "current": None,
-                "power": None, "energy": None,
+                "power": None, "energy": None, "frequency": None, "power_factor": None,
                 "error": "RS485 direction pin conflicts with a relay GPIO pin."}
 
     result = {"slave_id": slave_id, "voltage": None, "current": None,
-              "power": None, "energy": None, "error": None}
+              "power": None, "energy": None, "frequency": None, "power_factor": None, "error": None}
     try:
         with serial.Serial(
             port,
@@ -313,6 +315,8 @@ def read_pzem(port, slave_id: int = 1):
             result["power"] = _decode_register_value(raw[6:10]) / 10.0
             # The PZEM stores energy in Wh; main.py accumulates Wh deltas as kWh.
             result["energy"] = _decode_register_value(raw[10:14])
+            result["frequency"] = int.from_bytes(raw[14:16], "big") / 10.0
+            result["power_factor"] = int.from_bytes(raw[16:18], "big") / 100.0
         return result
     except Exception as exc:
         result["error"] = str(exc)
@@ -324,7 +328,8 @@ def read_all_pzem():
     if os.environ.get("SIMULATE_HARDWARE") == "1":
         return [
             {"slave_id": slave_id, "voltage": 230.0, "current": 0.5 * slave_id,
-             "power": 115.0 * slave_id, "energy": 0.0, "error": None}
+             "power": 115.0 * slave_id, "energy": 0.0, "frequency": 60.0,
+             "power_factor": 0.98, "error": None}
             for slave_id in PZEM_SLAVE_IDS
         ]
     readings = []

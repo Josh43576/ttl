@@ -97,6 +97,8 @@ class Log(db.Model):
     power = db.Column(db.Float)
     slave_id = db.Column(db.Integer)
     energy = db.Column(db.Float)
+    frequency = db.Column(db.Float)
+    power_factor = db.Column(db.Float)
     daily_energy_wh = db.Column(db.Float)
     date_recorded = db.Column(db.DateTime, default=utcnow_naive)
 
@@ -328,6 +330,10 @@ def migrate_schema():
             db.session.execute(text('ALTER TABLE logs ADD COLUMN energy FLOAT'))
         if 'daily_energy_wh' not in columns:
             db.session.execute(text('ALTER TABLE logs ADD COLUMN daily_energy_wh FLOAT'))
+        if 'frequency' not in columns:
+            db.session.execute(text('ALTER TABLE logs ADD COLUMN frequency FLOAT'))
+        if 'power_factor' not in columns:
+            db.session.execute(text('ALTER TABLE logs ADD COLUMN power_factor FLOAT'))
         db.session.execute(text('CREATE INDEX IF NOT EXISTS ix_logs_date_recorded ON logs(date_recorded)'))
     if 'users' in tables:
         columns = {column['name'] for column in inspector.get_columns('users')}
@@ -640,7 +646,7 @@ def dashboard():
         can_control=bool(current_user.is_admin),
         user_display_name=display_name,
         history_today=local_today.isoformat(),
-        history_min=(local_today - datetime.timedelta(days=29)).isoformat(),
+        history_min=(local_today - datetime.timedelta(days=364)).isoformat(),
         sensor_id_by_device=SENSOR_ID_BY_DEVICE,
         pzem_port_by_slave_id=PZEM_PORT_BY_SLAVE_ID,
     )
@@ -684,6 +690,8 @@ def api_kiosk_state():
             'slave_id': slave_id,
             'voltage': row.voltage if row and fresh else None,
             'current': row.current if row and fresh else None,
+            'frequency': row.frequency if row and fresh else None,
+            'power_factor': row.power_factor if row and fresh else None,
             'power': row.power if row and fresh else None,
             'energy_kwh': row.energy / 1000.0 if row and fresh and row.energy is not None else None,
             'daily_energy_wh': (0.0 if entry.energy_reset_pending else entry.daily_energy_wh) if row and fresh else None,
@@ -1007,6 +1015,10 @@ def api_data():
         voltage = optional_reading('voltage')
         current = optional_reading('current')
         energy = optional_reading('energy')
+        frequency = optional_reading('frequency')
+        power_factor = optional_reading('power_factor')
+        if power_factor is not None and power_factor > 1:
+            power_factor = None
         try:
             daily_energy_wh = float(daily_energy_by_slave.get(str(slave_id)))
         except (TypeError, ValueError):
@@ -1021,6 +1033,8 @@ def api_data():
             power=power,
             slave_id=slave_id,
             energy=energy,
+            frequency=frequency,
+            power_factor=power_factor,
             daily_energy_wh=daily_energy_wh,
         ))
 
@@ -1028,7 +1042,7 @@ def api_data():
         return jsonify({"error": "no readings contained valid voltage, current, and power values", "accepted": 0}), 400
 
     try:
-        retention_cutoff = utcnow_naive() - datetime.timedelta(days=30)
+        retention_cutoff = utcnow_naive() - datetime.timedelta(days=365)
         Log.query.filter(Log.date_recorded < retention_cutoff).delete(synchronize_session=False)
         entries_by_slave = {
             SENSOR_ID_BY_DEVICE[entry.appliance_key]: entry for entry in ordered_appliance_configs()
@@ -1059,6 +1073,8 @@ def api_latest():
             'voltage': row.voltage,
             'current': row.current,
             'power': row.power,
+            'frequency': row.frequency,
+            'power_factor': row.power_factor,
             'energy': row.energy,
             'date_recorded': row.date_recorded.isoformat() if row.date_recorded else None,
         })
@@ -1069,6 +1085,75 @@ def api_latest():
 @login_required
 def api_consumption():
     """Return daily cumulative-energy deltas and 5-minute average power samples."""
+    period = request.args.get('period', 'day').strip().lower()
+    if period != 'day':
+        spans = {'hour': (datetime.timedelta(hours=1), datetime.timedelta(minutes=1)),
+                 'half_day': (datetime.timedelta(hours=12), datetime.timedelta(minutes=15)),
+                 'month': (datetime.timedelta(days=30), datetime.timedelta(hours=1)),
+                 'year': (datetime.timedelta(days=365), datetime.timedelta(days=1))}
+        if period not in spans:
+            return jsonify({'error': 'period must be hour, half_day, day, month, or year'}), 400
+        span, bucket_size = spans[period]
+        local_end = datetime.datetime.now(APP_TIMEZONE)
+        local_start = local_end - span
+        utc_start = local_start.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        utc_end = local_end.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        rows = Log.query.filter(Log.slave_id.in_([1, 2, 3]), Log.date_recorded >= utc_start,
+                                Log.date_recorded < utc_end).order_by(Log.date_recorded.asc()).all()
+        previous = {}
+        for slave_id in (1, 2, 3):
+            previous_row = Log.query.filter(Log.slave_id == slave_id, Log.date_recorded < utc_start,
+                                            Log.energy.isnot(None)).order_by(Log.date_recorded.desc()).first()
+            try:
+                previous[slave_id] = float(previous_row.energy) if previous_row else None
+            except (TypeError, ValueError):
+                previous[slave_id] = None
+        energy_values = {slave: [] for slave in (1, 2, 3)}
+        bucket_values, sample_counts = {}, {slave: 0 for slave in (1, 2, 3)}
+        for row in rows:
+            sid = row.slave_id
+            try:
+                energy = float(row.energy)
+                power = float(row.power)
+            except (TypeError, ValueError):
+                energy = power = None
+            if energy is not None and math.isfinite(energy) and energy >= 0:
+                energy_values[sid].append(energy)
+            if power is None or not math.isfinite(power) or power < 0 or row.date_recorded is None:
+                continue
+            local_stamp = row.date_recorded.replace(tzinfo=datetime.timezone.utc).astimezone(APP_TIMEZONE)
+            seconds = int((local_stamp - local_start).total_seconds())
+            bucket_seconds = max(1, int(bucket_size.total_seconds()))
+            bucket = local_start + datetime.timedelta(seconds=(seconds // bucket_seconds) * bucket_seconds)
+            bucket_values.setdefault(bucket, {}).setdefault(sid, []).append(power)
+            sample_counts[sid] += 1
+        consumption, partial = {}, False
+        for sid in (1, 2, 3):
+            values = energy_values[sid]
+            if not values:
+                consumption[sid] = None
+                partial = True
+                continue
+            if previous[sid] is None:
+                partial = True
+                consumption[sid] = None if len(values) < 2 else sum(
+                    current - prior if current >= prior else current for prior, current in zip(values, values[1:])
+                ) / 1000.0
+            else:
+                consumption[sid] = sum(current - prior if current >= prior else current
+                                        for prior, current in zip([previous[sid], *values], values)) / 1000.0
+        total = sum(consumption.values()) if all(value is not None for value in consumption.values()) else None
+        series = []
+        for bucket in sorted(bucket_values):
+            point = {'time': bucket.isoformat()}
+            for sid in (1, 2, 3):
+                samples = bucket_values[bucket].get(sid, [])
+                point[f'slave_{sid}'] = sum(samples) / len(samples) if samples else None
+            series.append(point)
+        return jsonify({'date': local_end.date().isoformat(), 'range_label': f'{local_start:%Y-%m-%d %H:%M} - {local_end:%Y-%m-%d %H:%M}',
+                        'timezone': APP_TIMEZONE_NAME, 'consumption_kwh': {str(s): consumption[s] for s in (1, 2, 3)},
+                        'total_kwh': total, 'partial': partial,
+                        'power_sample_count': {str(s): sample_counts[s] for s in (1, 2, 3)}, 'series': series})
     requested_date = request.args.get('date', '').strip()
     try:
         selected_day = datetime.date.fromisoformat(requested_date)
@@ -1076,11 +1161,11 @@ def api_consumption():
         return jsonify({'error': 'date must use YYYY-MM-DD format'}), 400
 
     local_now = datetime.datetime.now(APP_TIMEZONE)
-    earliest_day = local_now.date() - datetime.timedelta(days=29)
+    earliest_day = local_now.date() - datetime.timedelta(days=364)
     if selected_day > local_now.date():
         return jsonify({'error': 'future dates are unavailable'}), 400
     if selected_day < earliest_day:
-        return jsonify({'error': 'history is available for the most recent 30 days'}), 400
+        return jsonify({'error': 'history is available for the most recent year'}), 400
 
     local_start = datetime.datetime.combine(selected_day, datetime.time.min, tzinfo=APP_TIMEZONE)
     local_end = datetime.datetime.combine(

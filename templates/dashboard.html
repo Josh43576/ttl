@@ -12,8 +12,9 @@
     <header class="system-header">
         <div class="welcome-cluster"><span class="eyebrow">Power monitor</span><h1>Welcome, {{ user_display_name }}</h1></div>
         <div class="header-actions">
+            <button class="menu-toggle" id="menuToggle" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="sideMenu"><span></span><span></span><span></span></button>
             <div class="status-pill is-baseline" id="modePill"><span class="pulse-dot"></span><div class="status-copy"><span class="status-label">DEVICE STATUS</span><strong id="modeText">Waiting for telemetry</strong></div></div>
-            <div class="utility-actions">{% if can_control %}<a class="header-action" href="{{ url_for('kiosk') }}">KIOSK</a>{% endif %}<button class="header-action" data-view="settings" type="button">SETTINGS</button><button class="header-action" data-view="help" type="button">HELP</button><a class="logout-btn" href="{{ url_for('logout') }}">LOG OUT</a></div>
+            <div class="utility-actions">{% if can_control %}<a class="header-action" href="{{ url_for('kiosk') }}">KIOSK</a>{% endif %}<a class="logout-btn" href="{{ url_for('logout') }}">LOG OUT</a></div>
         </div>
     </header>
 
@@ -31,6 +32,8 @@
                         <div class="metric-box"><div><label>Voltage</label><strong class="metric-value" data-field="voltage">-- V</strong></div></div>
                         <div class="metric-box"><div><label>Current</label><strong class="metric-value" data-field="current">-- A</strong></div></div>
                         <div class="metric-box"><div><label>Energy</label><strong class="metric-value" data-field="energy">-- kWh</strong></div></div>
+                        <div class="metric-box"><div><label>Frequency</label><strong class="metric-value" data-field="frequency">-- Hz</strong></div></div>
+                        <div class="metric-box"><div><label>Power factor</label><strong class="metric-value" data-field="power_factor">--</strong></div></div>
                     </div>
                     <div class="gauge-panel"><div class="gauge-ring" data-progress="0"><div class="gauge-value"><span data-field="power">-- W</span><small data-field="timestamp">Awaiting telemetry</small></div></div></div>
                     <p class="sensor-status" data-sensor="{{ slave_id }}">Sensor status: unknown</p>
@@ -68,8 +71,11 @@
     <main class="view-shell history-view" id="historyView">
         <section class="history-panel glass-panel">
             <div class="history-toolbar">
-                <div class="analytics-header"><div><p class="eyebrow">Monitoring only</p><h3>Daily consumption and load</h3></div></div>
-                <label class="history-date-label" for="historyDate">Choose a day
+                <div class="analytics-header"><div><p class="eyebrow">Monitoring only</p><h3>Energy and load history</h3></div></div>
+                <label class="history-date-label" for="historyPeriod">Reading period
+                    <select id="historyPeriod"><option value="hour">Last hour</option><option value="half_day">Last 12 hours</option><option value="day" selected>One day</option><option value="month">Last 30 days</option><option value="year">Last 365 days</option></select>
+                </label>
+                <label class="history-date-label" id="historyDateWrap" for="historyDate">Choose a day
                     <input id="historyDate" type="date" value="{{ history_today }}" min="{{ history_min }}" max="{{ history_today }}">
                 </label>
             </div>
@@ -82,7 +88,7 @@
                 {% endfor %}
             </div>
             <div class="history-chart-wrap"><canvas id="dailyLoadChart" width="1200" height="460" aria-label="Five-minute average power for the selected day"></canvas></div>
-            <p class="history-footnote">Graph shows five-minute average power in watts. History is available for the most recent 30 days.</p>
+            <p class="history-footnote" id="historyFootnote">Graph shows average power for the selected period. History is retained for up to one year.</p>
         </section>
     </main>
 
@@ -98,18 +104,21 @@
     <main class="view-shell help-view" id="helpView"><section class="help-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Support</p><h3>Operating notes</h3></div></div><ol class="manual-list"><li>Confirm sensor diagnostics match each physical circuit.</li><li>Each circuit’s Wh budget is based on accumulated daily meter energy and resets at midnight.</li><li>The total system cap remains an instantaneous W cutoff.</li><li>The Pi rejects ON requests on sensor or configuration failure. Verify relay polarity and wiring with a safe test setup.</li></ol></section></main>
 </div>
 
-<div class="fab-stack" aria-label="Primary navigation" role="navigation">
-    <button class="fab active" data-view="live" type="button">APPLIANCES</button><button class="fab" data-view="analytics" type="button">LIVE POWER</button><button class="fab" data-view="history" type="button">HISTORY</button><button class="fab" data-view="settings" type="button">SETTINGS</button><button class="fab" data-view="help" type="button">HELP</button>
-</div>
+<div class="menu-backdrop" id="menuBackdrop" hidden></div><nav class="side-menu" id="sideMenu" aria-label="Main navigation" aria-hidden="true"><div class="side-menu-head"><strong>System menu</strong><button class="menu-close" id="menuClose" type="button" aria-label="Close navigation menu">×</button></div><button class="menu-link active" data-view="live" type="button">Appliances</button><button class="menu-link" data-view="analytics" type="button">Live power</button><button class="menu-link" data-view="history" type="button">History</button><button class="menu-link" data-view="settings" type="button">Settings</button><button class="menu-link" data-view="help" type="button">Help</button>{% if can_control %}<a class="menu-link" href="{{ url_for('kiosk') }}">RFID kiosk</a>{% endif %}<a class="menu-link menu-logout" href="{{ url_for('logout') }}">Log out</a></nav>
 
 <script>
 const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
 const views = {live: document.getElementById('liveView'), analytics: document.getElementById('analyticsView'), history: document.getElementById('historyView'), settings: document.getElementById('settingsView'), help: document.getElementById('helpView')};
-function setView(target) { Object.entries(views).forEach(([name, view]) => view.classList.toggle('active', name === target)); document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === target)); if (target === 'history') loadHistory(); }
+const sideMenu = document.getElementById('sideMenu'), menuToggle = document.getElementById('menuToggle'), menuBackdrop = document.getElementById('menuBackdrop');
+function closeMenu() { sideMenu.classList.remove('open'); sideMenu.setAttribute('aria-hidden', 'true'); menuToggle.setAttribute('aria-expanded', 'false'); menuBackdrop.hidden = true; }
+function setView(target) { Object.entries(views).forEach(([name, view]) => view.classList.toggle('active', name === target)); document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === target)); closeMenu(); if (target === 'history') loadHistory(); }
+menuToggle.addEventListener('click', () => { const open = !sideMenu.classList.contains('open'); sideMenu.classList.toggle('open', open); sideMenu.setAttribute('aria-hidden', String(!open)); menuToggle.setAttribute('aria-expanded', String(open)); menuBackdrop.hidden = !open; });
+document.getElementById('menuClose').addEventListener('click', closeMenu); menuBackdrop.addEventListener('click', closeMenu);
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { if (views[button.dataset.view]) setView(button.dataset.view); }));
 
 const historyDateInput = document.getElementById('historyDate');
-historyDateInput.addEventListener('change', loadHistory);
+const historyPeriodInput = document.getElementById('historyPeriod');
+historyDateInput.addEventListener('change', loadHistory); historyPeriodInput.addEventListener('change', () => { document.getElementById('historyDateWrap').hidden = historyPeriodInput.value !== 'day'; loadHistory(); });
 
 // Demo branch circuits are local to this browser and never enter the device API.
 const demoBranchStorageKey = 'energyDashboardDemoBranches';
@@ -227,12 +236,12 @@ demoBranchGrid?.addEventListener('click', event => {
 renderDemoBranches();
 
 async function loadHistory() {
-    const day = historyDateInput.value;
-    if (!day) return;
+    const day = historyDateInput.value, period = historyPeriodInput.value;
+    if (!day && period === 'day') return;
     const status = document.getElementById('historyStatus');
     status.textContent = 'Loading saved readings…';
     try {
-        const response = await fetch(`/api/consumption?date=${encodeURIComponent(day)}`, {cache: 'no-store'});
+        const response = await fetch(`/api/consumption?period=${encodeURIComponent(period)}${period === 'day' ? `&date=${encodeURIComponent(day)}` : ''}`, {cache: 'no-store'});
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || 'Could not load consumption history');
 
@@ -247,7 +256,7 @@ async function loadHistory() {
         const historySummary = payload.partial
             ? 'Some meter energy totals may be partial; totals use cumulative PZEM counter changes.'
             : `Energy is calculated from each meter’s cumulative counter.`;
-        status.textContent = `Showing ${payload.date} in ${payload.timezone}. ${historySummary} Samples saved: ${sampleSummary}.`;
+        status.textContent = `Showing ${payload.range_label || payload.date} in ${payload.timezone}. ${historySummary} Samples saved: ${sampleSummary}.`;
         drawLoadSeries(payload.series || []);
     } catch (error) {
         document.querySelector('[data-daily-total]').textContent = '-- kWh';
@@ -352,12 +361,16 @@ async function updateTelemetry() {
                 card.querySelector('[data-field="voltage"]').textContent = display(reading.voltage, 1, 'V');
                 card.querySelector('[data-field="current"]').textContent = display(reading.current, 3, 'A');
                 card.querySelector('[data-field="energy"]').textContent = display(reading.energy, 3, 'kWh', 1000);
+                card.querySelector('[data-field="frequency"]').textContent = display(reading.frequency, 1, 'Hz');
+                card.querySelector('[data-field="power_factor"]').textContent = reading.power_factor == null ? '--' : Number(reading.power_factor).toFixed(2);
                 card.querySelector('[data-field="power"]').textContent = `${powers[index].toFixed(1)} W`;
                 card.querySelector('[data-field="timestamp"]').textContent = new Date(reading.date_recorded + 'Z').toLocaleTimeString();
             } else {
                 card.querySelector('[data-field="voltage"]').textContent = '-- V';
                 card.querySelector('[data-field="current"]').textContent = '-- A';
                 card.querySelector('[data-field="energy"]').textContent = '-- kWh';
+                card.querySelector('[data-field="frequency"]').textContent = '-- Hz';
+                card.querySelector('[data-field="power_factor"]').textContent = '--';
                 card.querySelector('[data-field="power"]').textContent = '-- W';
                 card.querySelector('[data-field="timestamp"]').textContent = reading.date_recorded ? `Last seen ${new Date(reading.date_recorded + 'Z').toLocaleTimeString()}` : 'No recent reading';
             }
